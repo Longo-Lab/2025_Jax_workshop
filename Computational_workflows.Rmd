@@ -14,11 +14,12 @@ output:
 # knitr options
 
 # packages to load
-library(Seurat)
+library(Seurat) # uses DESeq2 and MAST
 library(ggplot2)
 library(data.table)
 library(Giotto)
 library(patchwork)
+
 ```
 # Introductory concepts (lecture)
 
@@ -134,7 +135,62 @@ p1 + p2
 
 ```
 
-## Differential expression (mention pseudo-bulk analysis)
+## Differential expression 
+```{r, sc_de}
+# which column contains cell types?
+ctype <- 'seurat_clusters'
+# which column contains experimental groups?
+group <- 'groups'
+
+# standard DE analysis --------------------------------------------------------
+Idents(sc) <- ctype
+# running in a lapply loop to test each cell type (future.lapply can be even faster) 
+de <- lapply(levels(sc), function(i) {
+  data.table(
+    FindMarkers(sc,
+      ident.1 = 'g1',
+      ident.2 = 'g2',
+      group.by = group,
+      subset.ident = i,
+      test.use = "MAST",
+      max.cells.per.ident = 10000
+    )
+  )
+})
+# Using data.table allows us to quickly/safely combine our de results into one table 
+setattr(de, 'names', levels(sc))
+de <- rbindlist(de, idcol = ctype)
+```
+
+While that can quickly get your result, too many cells from the same sample can result in inflated confidence in significance values. This can be partially limited with `max.cells.per.ident`, the preferred method is to pseudobulk your counts by sample for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. Try for n >= 6 per group.
+```{r, sc_de_pseudo}
+# using pseudobulk analysis to control for within-sample correlation -----------
+pseudo <- AggregateExpression(sc, 
+  assays = "RNA", 
+  return.seurat = TRUE, 
+  group.by = c("letter.idents", group, ctype)
+)
+
+Idents(pseudo) <- ctype
+# running in a lapply loop to test each cell type (future.lapply can be even faster) 
+de <- lapply(levels(pseudo), function(i) {
+  data.table(
+    FindMarkers(pseudo,
+      ident.1 = 'g1',
+      ident.2 = 'g2',
+      group.by = group,
+      subset.ident = i,
+      min.cells.group = 2,
+      test.use = "DESeq2"
+    )
+  )
+})
+# Using data.table allows us to quickly/safely combine our de results into one table 
+setattr(de, 'names', levels(pseudo))
+de <- rbindlist(de, idcol = ctype)
+
+```
+
 
 # Introduction spatial (lecture) (from Sue)
 Maybe just link to the broader [introduction](https://smcclatchy.github.io/spatial-transcriptomics/introduction.html) page?

@@ -1,0 +1,118 @@
+---
+title: "Computational Workflows for Single Cell and Spatial Transcriptomics"
+author: "Robert R Butler III, Ph.D."
+output: html_notebook
+---
+
+```{r, load_up, include = FALSE}
+library(Seurat)
+library(data.table)
+library(Giotto)
+library(patchwork)
+```
+# Introductory concepts (lecture)
+
+
+# Single-cell analysis (interactive)
+To begin, this course assumes you have a basic familiarity with single-cell analysis using the [Seurat](https://satijalab.org/seurat/) package. We won't cover in huge detail the major steps in a single-cell analysis, but leave it for you to explore. Our key steps:
+
+1. Clean the data (not included) - see tools like SoupX, DoubletFinder, etc
+2. (Optional) Integrate datasets, if multiple
+3. Normalize & Scale
+4. Calculate Principal Components
+5. Find Neighbors
+6. Find Clusters
+7. Run UMAP
+
+## Prep the (cleaned) data
+This will define standard settings you intend to run for the analysis
+```{r, get_sc_data}
+# sc <- readRDS()
+sc <- pbmc_small
+
+# do you have multiple conditions to integrate?
+integ <- TRUE
+# what column name contaions the groups you are integrating?
+g_col <- 'groups' 
+# how many principal components do you wish to use?
+pcs <- 5
+# what clustering resolution? 
+resi <- 0.8
+
+```
+
+## Clean and annotate
+The bulk of the 
+```{r, sc_process, message=FALSE}
+if (integ) {
+  # split by group
+  sc[["RNA"]] <- split(sc[["RNA"]], f = sc@meta.data[[g_col]])
+
+  # Prep & PCA on each group
+  sc %>%
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData(vars.to.regress = c("letter.idents")) %>%
+    RunPCA(npcs = pcs) %>%
+    RunUMAP(dims = 1:pcs, reduction.name = "umap") %>%
+    # feature selection and integration prep
+    IntegrateLayers(
+      method = HarmonyIntegration,
+      new.reduction = "harmony",
+      verbose = TRUE
+    ) %>%
+    RunUMAP(
+      dims = 1:pcs, 
+      reduction = "harmony", 
+      reduction.name = "umap.harmony"
+    ) %>%
+    FindNeighbors(reduction = "harmony", dims = 1:pcs) %>%
+    FindClusters(resolution = resi) %>%
+
+    # combine again
+    JoinLayers() -> sc
+
+} else { # otherwise, ignore integration
+  sc %>%
+    NormalizeData() %>%
+    FindVariableFeatures() %>%
+    ScaleData(vars.to.regress = c("letter.idents")) %>%
+    RunPCA(npcs = pcs) %>%
+    FindNeighbors(dims = 1:pcs) %>%
+    FindClusters() %>%
+    RunUMAP(dims = 1:pcs) -> sc
+} 
+
+```
+
+
+## Cell type annotations (maybe link MapMyCells)
+```{r, de_sc}
+p1 <- DimPlot(sc, reduction = "umap", group.by = g_col)
+p2 <- DimPlot(sc, reduction = "umap.harmony", group.by = g_col)
+p1 + p2
+
+```
+## Differential expression (mention pseudo-bulk analysis)
+
+# Introduction spatial (lecture) (from Sue)
+Maybe just link to the broader [introduction](https://smcclatchy.github.io/spatial-transcriptomics/introduction.html) page?
+
+# Spatial analysis (interactive)
+
+## Download the data
+## Clean and annotate
+## Cell type annotations
+## Spatial genes
+## Spatial proximity
+## Interaction changed features
+
+# Single-cell x Spatial analysis (interactive)
+1.	Differential ligand-receptor analysis
+2.	Differential spatial relationships
+3.	(maybe) Correlation to TREAT-AD
+
+# Conclusion concepts (lecture)
+(Maybe with time) Future promising tools (lecture or demo, non-interactive)
+## Spacia + downstream genes in target cell
+## Multimodal integration tools

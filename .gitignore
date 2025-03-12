@@ -1,0 +1,21 @@
+# Ignore everything
+*
+
+# But not these files...
+!*.sh
+!*.pl
+!*.py
+!*.R
+!*.Rmd
+!*.nb.html
+!*.ipynb
+!*.md
+!README.md
+!.gitignore
+# etc...
+
+# ...even if they are in subdirectories
+!*/
+.Rproj.user
+
+# But do ignore these files...

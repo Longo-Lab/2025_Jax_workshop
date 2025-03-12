@@ -1,11 +1,21 @@
 ---
 title: "Computational Workflows for Single Cell and Spatial Transcriptomics"
 author: "Robert R Butler III, Ph.D."
-output: html_notebook
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+    fig_width: 10
+    fig_align: center
 ---
 
 ```{r, load_up, include = FALSE}
+# knitr options
+
+# packages to load
 library(Seurat)
+library(ggplot2)
 library(data.table)
 library(Giotto)
 library(patchwork)
@@ -41,11 +51,11 @@ resi <- 0.8
 
 ```
 
-## Clean and annotate
-The bulk of the 
-```{r, sc_process, message=FALSE}
+## Clean and Analyze
+The bulk of the processing can be done in rapid succession, with linking `%>%` chains.
+```{r, sc_process, message = FALSE, warning = FALSE}
 if (integ) {
-  # split by group
+  # split by group column
   sc[["RNA"]] <- split(sc[["RNA"]], f = sc@meta.data[[g_col]])
 
   # Prep & PCA on each group
@@ -55,6 +65,7 @@ if (integ) {
     ScaleData(vars.to.regress = c("letter.idents")) %>%
     RunPCA(npcs = pcs) %>%
     RunUMAP(dims = 1:pcs, reduction.name = "umap") %>%
+
     # feature selection and integration prep
     IntegrateLayers(
       method = HarmonyIntegration,
@@ -85,14 +96,44 @@ if (integ) {
 
 ```
 
+How did that integration turn out? We can visualize with the two UMAPs if we did integration, or just plotting the standard UMAP if we did not.
+```{r, integ_plot}
+if (integ) {
+  p1 <- DimPlot(sc, reduction = "umap", group.by = g_col)
+  p2 <- DimPlot(sc, reduction = "umap.harmony", group.by = g_col)
+  p1 + p2
+} else {
+  DimPlot(sc, reduction = "umap", group.by = g_col)
+}
+```
+
 
 ## Cell type annotations (maybe link MapMyCells)
-```{r, de_sc}
-p1 <- DimPlot(sc, reduction = "umap", group.by = g_col)
-p2 <- DimPlot(sc, reduction = "umap.harmony", group.by = g_col)
+Cell type identification is a class unto itself. Usually good methods involve a mix of automated cell type predictions, followed by careful curation to:
+
+1. Verify cell type predictions & consolidate them across clusters
+2. Eliminate heterotypic doublets & low quality cells
+3. Subcluster and define population subtypes.
+
+One useful tool for lightweight annotation prediction is the [MapMyCells](https://knowledge.brain-map.org/mapmycells/process) web server. In our case, we already have expertly curated cell types, defined by the XXXXXX column, as well as our experimental phenotype XXXXXX
+```{r, annot_plot}
+# choose your umap
+if (integ) {
+  red <- "umap.harmony"
+} else {
+  red <- "umap"
+}
+
+# plots by functional annotation
+p1 <- DimPlot(sc, reduction = red) + 
+  ggtitle("clusters") +
+  theme(plot.title = element_text(hjust = 0.5))
+p2 <- DimPlot(sc, reduction = red, group.by = "letter.idents")
+
 p1 + p2
 
 ```
+
 ## Differential expression (mention pseudo-bulk analysis)
 
 # Introduction spatial (lecture) (from Sue)

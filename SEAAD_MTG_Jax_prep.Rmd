@@ -1,0 +1,126 @@
+---
+title: "SEA-AD Prep for 2025 Jax workshop"
+author: "Robert R Butler III"
+output: html_notebook
+---
+
+To prep data for the workshop, it will need to be converted to Seurat & Giotto formats
+```{r, load, include=FALSE}
+library(Seurat)
+library(anndata)
+# library(anndataR)
+library(data.table)
+
+
+```
+
+## Look at the metadata
+```{r}
+# read in metadata 
+meta <- data.table(readxl::read_xlsx("Supplementary Table 1.xlsx"))
+meta <- meta[`snRNA-seq` == "Y" & MERFISH2 == "Y"]
+meta <- meta[is.na(`If other Consensus dx, describe`)]
+meta$`Overall AD neuropathological Change` <- factor(
+  meta$`Overall AD neuropathological Change`, levels = c("Not AD", "Low", "Intermediate", "High")
+)
+
+# subsetting for donors on extremes, without comorbidities
+donors <- meta[
+  (
+    `Overall AD neuropathological Change` %in% c("Not AD", "Low") 
+    & `Consensus Clinical Dx (choice=Control)` == "Checked"
+    & `Cognitive Status` == "No dementia"
+    & `Highest Lewy Body Disease` != "Limbic (Transitional)"
+    & !(`CERAD score` == "Sparse" & `Overall CAA Score` == "Moderate")
+  )
+  | (
+    `Overall AD neuropathological Change` %in% c("Intermediate", "High") 
+    & `Cognitive Status` == "Dementia"
+  ),
+  
+][order(`Overall AD neuropathological Change`, Thal), `Donor ID`]
+
+spat_donors <- donors[c(1:3, 10:12)]
+
+```
+
+
+## Prep the (cleaned) snRNAseq data
+This will define standard settings you intend to run for the analysis
+```{r, get_sc_data}
+# set up the dir and metadata to keep
+setwd("/labs/flongo/reference/SEA-AD")
+cols_keep <- c(
+  "Donor ID",
+  "Neurotypical reference",
+  "Sex",
+  "Age at Death",
+  "Overall AD neuropathological Change",
+  "Thal",
+  "Braak",
+  "CERAD score",
+  "Overall CAA Score",
+  "Highest Lewy Body Disease",
+  "Cognitive Status",
+  "Last MMSE Score",
+  "Interval from last MMSE in months",
+  "Continuous Pseudo-progression Score",
+  "APOE Genotype",
+  "Class",
+  "Subclass",
+  "Supertype"
+)
+
+# run a loop for all samples
+sc_list <- lapply(donors, function(i) {
+  # from the aws host
+  fn <- paste0(i, "_SEAAD_MTG_RNAseq_final-nuclei.2024-02-13.h5ad")
+  print(sprintf("downloading %s...", fn))
+  download.file(
+    url = paste0(
+      "https://sea-ad-single-cell-profiling.s3.amazonaws.com/MTG/RNAseq/donor_objects/",
+      fn
+    ),
+    destfile = fn,
+    quiet = TRUE,
+    method = "wget", 
+    extra = "-N"
+  )
+  
+  # build the Seurat Object with subset of the metadata
+  sc <- read_h5ad(fn)
+  sc1 <- CreateSeuratObject(
+    counts = t(sc$X),
+    assay = "RNA",
+    meta.data = sc$obs[, cols_keep],
+  )
+  
+  # return and manage memory
+  remove(sc)
+  gc()
+  return(sc1)
+})
+
+
+# Join the samples
+sc <- merge(
+  x = sc_list[[1]],
+  y = sc_list[2:length(sc_list)],
+  collapse = TRUE
+)
+remove(sc_list)
+gc()
+
+```
+
+## Prep the (cleaned MERFISH data)
+```{r}
+sc <- zellkonverter::readH5AD("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
+
+
+
+```
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

@@ -118,7 +118,7 @@ Cell type identification is a class unto itself. Usually good methods involve a 
 
 One useful tool for lightweight annotation prediction is the [MapMyCells](https://knowledge.brain-map.org/mapmycells/process) web server. In our case, we already have expertly curated cell types, defined by the XXXXXX column, as well as our experimental phenotype XXXXXX
 ```{r, annot_plot}
-# choose your umap
+# Selecting your umap to plot
 if (integ) {
   red <- "umap.harmony"
 } else {
@@ -160,6 +160,7 @@ de <- lapply(levels(sc), function(i) {
 # Using data.table allows us to quickly/safely combine our de results into one table 
 setattr(de, 'names', levels(sc))
 de <- rbindlist(de, idcol = ctype)
+
 ```
 
 While that can quickly get your result, too many cells from the same sample can result in inflated confidence in significance values. This can be partially limited with `max.cells.per.ident`, the preferred method is to pseudobulk your counts by sample for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. Try for n >= 6 per group.
@@ -188,6 +189,7 @@ de <- lapply(levels(pseudo), function(i) {
 # Using data.table allows us to quickly/safely combine our de results into one table 
 setattr(de, 'names', levels(pseudo))
 de <- rbindlist(de, idcol = ctype)
+# ggplot facet volcanoes
 
 ```
 

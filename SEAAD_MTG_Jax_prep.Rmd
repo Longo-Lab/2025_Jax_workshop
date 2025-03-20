@@ -95,6 +95,11 @@ sc_list <- lapply(donors, function(i) {
     meta.data = sc$obs[, cols_keep],
   )
   
+  # downsample to save space (5k cells per sample)
+  set.seed(123)
+  cells <- sample(Cells(sc1), size = 5000)
+  sc1 <- subset(sc1, cells = cells)
+  
   # return and manage memory
   remove(sc)
   gc()
@@ -105,17 +110,21 @@ sc_list <- lapply(donors, function(i) {
 # Join the samples
 sc <- merge(
   x = sc_list[[1]],
-  y = sc_list[2:length(sc_list)],
-  collapse = TRUE
-)
+  y = sc_list[2:length(sc_list)]
+) 
 remove(sc_list)
 gc()
+sc <- JoinLayers(sc)
+
+# Save output
+saveRDS(sc, file = paste("SEAAD_MTG_RNAseq_final-nuclei.5k_demo.rds", sep = "."))
+
 
 ```
 
 ## Prep the (cleaned MERFISH data)
 ```{r}
-sc <- zellkonverter::readH5AD("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
+sc <- read_h5ad("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
 
 
 

@@ -292,12 +292,33 @@ More types of analysis are still developing, and the space can be described as
 
 # Spatial analysis (interactive)
 Part of the reason we chose the SEA-AD dataset as a reference, is because we can work on the same Donor samples across multiple technologies. The Allen Inst. included MERFISH data for the same region, MTG, for many participants, including our twelve folks. That way, we can do some compare/contrasting of the two datasets. 
-## Download the data
-## Clean and annotate
+## Set up the data
+```{r}
+```
+## Clean and prep
+```{r}
+
+```
+
 ## Cell type annotations
+```{r}
+
+```
+
 ## Spatial genes
+```{r}
+
+```
+
 ## Spatial proximity
+```{r}
+
+```
+
 ## Interaction changed features
+```{r}
+
+```
 
 # Single-cell x Spatial analysis (interactive)
 1.	Differential ligand-receptor analysis

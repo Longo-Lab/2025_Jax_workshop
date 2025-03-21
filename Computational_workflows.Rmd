@@ -38,15 +38,15 @@ To begin, this course assumes you have a basic familiarity with single-cell anal
 ## Prep the (cleaned) data
 This will define standard settings you intend to run for the analysis
 ```{r, get_sc_data}
-# sc <- readRDS()
-sc <- pbmc_small
+sc <- readRDS("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
+# sc <- pbmc_small
 
 # do you have multiple conditions to integrate?
 integ <- TRUE
-# what column name contaions the groups you are integrating?
-g_col <- 'groups' 
+# what column name contains the groups you are integrating?
+g_col <- 'Cognitive.Status' 
 # how many principal components do you wish to use?
-pcs <- 5
+pcs <- 30
 # what clustering resolution? 
 resi <- 0.8
 
@@ -63,7 +63,7 @@ if (integ) {
   sc %>%
     NormalizeData() %>%
     FindVariableFeatures() %>%
-    ScaleData(vars.to.regress = c("letter.idents")) %>%
+    ScaleData(vars.to.regress = c("Donor.ID")) %>%
     RunPCA(npcs = pcs) %>%
     RunUMAP(dims = 1:pcs, reduction.name = "umap") %>%
 
@@ -88,26 +88,30 @@ if (integ) {
   sc %>%
     NormalizeData() %>%
     FindVariableFeatures() %>%
-    ScaleData(vars.to.regress = c("letter.idents")) %>%
+    ScaleData(vars.to.regress = c("Donor.ID")) %>%
     RunPCA(npcs = pcs) %>%
     FindNeighbors(dims = 1:pcs) %>%
     FindClusters() %>%
     RunUMAP(dims = 1:pcs) -> sc
 } 
 
+# # Save progress
+# saveRDS(sc, file = "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
+# sc <- readRDS("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
+
 ```
 
 How did that integration turn out? We can visualize with the two UMAPs if we did integration, or just plotting the standard UMAP if we did not.
 ```{r, integ_plot}
 if (integ) {
-  p1 <- DimPlot(sc, reduction = "umap", group.by = g_col)
-  p2 <- DimPlot(sc, reduction = "umap.harmony", group.by = g_col)
-  p1 + p2
+  p1 <- DimPlot(sc, reduction = "umap", group.by = "Donor.ID", shuffle = TRUE)
+  p2 <- DimPlot(sc, reduction = "umap.harmony", group.by = "Donor.ID", shuffle = TRUE)
+  p1 + p2 + plot_layout(guides = 'collect')
 } else {
-  DimPlot(sc, reduction = "umap", group.by = g_col)
+  DimPlot(sc, reduction = "umap", group.by = "Donor.ID", shuffle = TRUE)
 }
 ```
-
+Generally, not a lot of improvement, the sequencing pipeline the Allen Inst. used seemed to be pretty consistent across donors.
 
 ## Cell type annotations (maybe link MapMyCells)
 Cell type identification is a class unto itself. Usually good methods involve a mix of automated cell type predictions, followed by careful curation to:
@@ -126,21 +130,26 @@ if (integ) {
 }
 
 # plots by functional annotation
-p1 <- DimPlot(sc, reduction = red) + 
-  ggtitle("clusters") +
+p1 <- DimPlot(sc, reduction = red, group.by = "Subclass", label = TRUE, repel = TRUE) + 
+  ggtitle("clusters") + 
+  NoLegend() +
   theme(plot.title = element_text(hjust = 0.5))
-p2 <- DimPlot(sc, reduction = red, group.by = "letter.idents")
+p2 <- DimPlot(sc, reduction = red, group.by = g_col, shuffle = TRUE) +
+    theme(legend.position = 'inside', legend.position.inside = c(0.6, 0.95))
 
 p1 + p2
 
 ```
 
 ## Differential expression 
+Now that we have data, we can use Seurat's built in [tools](https://satijalab.org/seurat/articles/de_vignette) to examine AD vs control differences. Notably, there are multiple methods for testing, with various options. Tools like MAST have some more stringent tests that also allow for inclusion of latent variables to correct for. Confounding variables like "Donor.ID" or "Sex" can impact your results! 
+
+For now, we are going for speed, running the standard Wilcoxon Rank Sum test (sped up with [presto](https://github.com/immunogenomics/presto)) using an lapply call to run each cell type in a list. We can then use data.table to stack them up and do fast operations on them like count the totals of DE genes (p_val_adjust < 0.05):
 ```{r, sc_de}
 # which column contains cell types?
-ctype <- 'seurat_clusters'
+ctype <- 'Subclass'
 # which column contains experimental groups?
-group <- 'groups'
+group <- 'Cognitive.Status'
 
 # standard DE analysis --------------------------------------------------------
 Idents(sc) <- ctype
@@ -148,48 +157,122 @@ Idents(sc) <- ctype
 de <- lapply(levels(sc), function(i) {
   data.table(
     FindMarkers(sc,
-      ident.1 = 'g1',
-      ident.2 = 'g2',
+      ident.1 = 'Dementia',
+      ident.2 = 'No dementia',
       group.by = group,
       subset.ident = i,
-      test.use = "MAST",
-      max.cells.per.ident = 10000
-    )
+      # test.use = "MAST", # more stringent test, also allows the use of latent.vars
+      # latent.vars = c("Donor.ID", "Sex", "Age.at.Death"),
+      max.cells.per.ident = 1000
+    ),
+    keep.rownames = TRUE
   )
 })
 # Using data.table allows us to quickly/safely combine our de results into one table 
 setattr(de, 'names', levels(sc))
 de <- rbindlist(de, idcol = ctype)
+setnames(de, "rn", "Symbol")
+
+# How many DE genes do we have?
+de[p_val_adj < 0.05, .N, by = Subclass]
 
 ```
 
-While that can quickly get your result, too many cells from the same sample can result in inflated confidence in significance values. This can be partially limited with `max.cells.per.ident`, the preferred method is to pseudobulk your counts by sample for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. Try for n >= 6 per group.
-```{r, sc_de_pseudo}
-# using pseudobulk analysis to control for within-sample correlation -----------
-pseudo <- AggregateExpression(sc, 
-  assays = "RNA", 
-  return.seurat = TRUE, 
-  group.by = c("letter.idents", group, ctype)
-)
+However, when doing differential expression it is important to consider that testing thousands of cells can inflate estimates of significance. Do you have a highly significant change with an `avg_log2FC` of 0.10 in less than 10% of your cell type (`pct.1` and `pct.2`). That may not reflect biologically relevant variability. 
 
-Idents(pseudo) <- ctype
-# running in a lapply loop to test each cell type (future.lapply can be even faster) 
-de <- lapply(levels(pseudo), function(i) {
-  data.table(
-    FindMarkers(pseudo,
-      ident.1 = 'g1',
-      ident.2 = 'g2',
-      group.by = group,
-      subset.ident = i,
-      min.cells.group = 2,
-      test.use = "DESeq2"
-    )
+In general you can limit this with certain options like limiting `max.cells.per.ident` for your comparisons, but the [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-analysis-after-pseudobulking) method is to construct pseudo-bulk datasets for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. Try for n >= 6 per group.
+```{r, sc_de_pseudo}
+# # using pseudobulk analysis to control for within-sample correlation -----------
+# pseudo <- AggregateExpression(sc, 
+#   assays = "RNA",
+#   return.seurat = TRUE, 
+#   group.by = c("Donor.ID", group, ctype)
+# )
+# pseudo@assays$RNA$counts <- round(pseudo@assays$RNA$counts)
+# 
+# # add in some meta.data from the overall plot
+# meta <- unique(data.table(sc@meta.data[, c("Donor.ID", "Sex", "Age.at.Death")]))
+# # map
+# Idents(pseudo) <- "Donor.ID"
+# pseudo[["Sex"]] <- plyr::mapvalues(
+#   x = pseudo@active.ident,
+#   from = meta[["Donor.ID"]],
+#   to = meta[["Sex"]]
+# )
+# pseudo[["Age.at.Death"]] <- plyr::mapvalues(
+#   x = pseudo@active.ident,
+#   from = meta[["Donor.ID"]],
+#   to = meta[["Age.at.Death"]]
+# )
+# 
+# Idents(pseudo) <- ctype
+# # running in a lapply loop to test each cell type (future.lapply can be even faster) 
+# de <- lapply(levels(pseudo), function(i) {
+#   data.table(
+#     FindMarkers(pseudo,
+#       ident.1 = 'Dementia',
+#       ident.2 = 'No dementia',
+#       group.by = group,
+#       subset.ident = i,
+#       latent.vars = c("Sex", "Age.at.Death"),
+#       test.use = "DESeq2"
+#     ),
+#     keep.rownames = TRUE
+#   )
+# })
+# # Using data.table allows us to quickly/safely combine our de results into one table 
+# setattr(de, 'names', levels(pseudo))
+# de <- rbindlist(de, idcol = ctype)
+# setnames(de, "rn", "Symbol")
+# 
+# # How many DE genes do we have?
+# de[p_val_adj < 0.05, .N, by = Subclass]
+
+```
+
+In the end, lets see what we got with some pictures
+```{r, volcanoes}
+# Add a significant column with a nested ifelse
+de[, sig := ifelse(
+  test = avg_log2FC < -0.5 & p_val_adj < 0.05, 
+  yes = "down", 
+  no = ifelse(
+    test = avg_log2FC > 0.5 & p_val_adj < 0.05, 
+    yes = "up", 
+    no = "ns"
   )
+)]
+
+# Add color, size and alpha (transparency) to volcano plot --------------------
+cols <- c("up" = "#ffad73", "down" = "#26b3ff", "ns" = "grey") 
+sizes <- c("up" = 1, "down" = 1, "ns" = 0.5) 
+alphas <- c("up" = 1, "down" = 1, "ns" = 0.5)
+
+# we need to plot each cell type, so we again use an lapply function for each Subclass
+plist <- lapply(sort(unique(de$Subclass)), function(i) {
+  ggplot(de[Subclass == i], 
+    aes(x = avg_log2FC, y = -log10(p_val_adj), fill = sig, size = sig, alpha = sig)
+  ) + 
+    geom_point(shape = 21, color = "black") + 
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed") + 
+    geom_vline(xintercept = c(-0.5, 0.5), linetype = "dashed") +
+    scale_fill_manual(values = cols) + # Modify point color
+    scale_size_manual(values = sizes) + # Modify point size
+    scale_alpha_manual(values = alphas) + # Modify point transparency
+    scale_x_continuous(
+      breaks = c(seq(-8, 8, 2)),       
+      limits = c(-8, 8)
+    ) +
+    ggtitle(i) + theme_classic() +
+    theme(
+      text = element_text(size = 5),
+      plot.title = element_text(hjust = 0.5), 
+      legend.position = 'none'
+    )
 })
-# Using data.table allows us to quickly/safely combine our de results into one table 
-setattr(de, 'names', levels(pseudo))
-de <- rbindlist(de, idcol = ctype)
-# ggplot facet volcanoes
+
+# stick them all together 
+wrap_plots(plist) + plot_layout(guides = 'collect')
 
 ```
 
@@ -197,8 +280,18 @@ de <- rbindlist(de, idcol = ctype)
 # Introduction spatial (lecture) (from Sue)
 Maybe just link to the broader [introduction](https://smcclatchy.github.io/spatial-transcriptomics/introduction.html) page?
 
-# Spatial analysis (interactive)
+Spatial data of either type can be evaluated in four conceptual frameworks (so far):
+![Insert diagram]() 
 
+1. Spatial features - is a gene more highly in a specific spatial region?
+2. Cell-cell proximity - once identified, do cell types occur more closely to one another?
+3. Interaction changed features - in those cells, does gene expression change based on proximity?
+4. Ligand-receptor interaction - proximity expression, but tested for ligand-receptor pairs in source-target cell types.
+
+More types of analysis are still developing, and the space can be described as 
+
+# Spatial analysis (interactive)
+Part of the reason we chose the SEA-AD dataset as a reference, is because we can work on the same Donor samples across multiple technologies. The Allen Inst. included MERFISH data for the same region, MTG, for many participants, including our twelve folks. That way, we can do some compare/contrasting of the two datasets. 
 ## Download the data
 ## Clean and annotate
 ## Cell type annotations

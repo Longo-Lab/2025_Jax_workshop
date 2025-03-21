@@ -97,7 +97,7 @@ sc_list <- lapply(donors, function(i) {
   
   # downsample to save space (5k cells per sample)
   set.seed(123)
-  cells <- sample(Cells(sc1), size = 5000)
+  cells <- sample(Cells(sc1), size = 2000)
   sc1 <- subset(sc1, cells = cells)
   
   # return and manage memory
@@ -117,7 +117,7 @@ gc()
 sc <- JoinLayers(sc)
 
 # Save output
-saveRDS(sc, file = paste("SEAAD_MTG_RNAseq_final-nuclei.5k_demo.rds", sep = "."))
+saveRDS(sc, file = paste("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds", sep = "."))
 
 
 ```

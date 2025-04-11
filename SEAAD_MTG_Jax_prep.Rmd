@@ -130,13 +130,16 @@ saveRDS(sc, file = paste("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds", sep = ".")
 # i don't really want to play around with reticulate and break it just to get it to maybe work for rstudio
 
 # read in
+cols_keep <- cols_keep[!cols_keep %in% c("Neurotypical reference", "APOE Genotype")]
 sc <- read_h5ad("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
-data.table(sc$X[sc$obs[["Donor ID"]] == "H20.33.001",], keep.rownames = TRUE)
-data.table(
-  sc$obs[sc$obs[["Donor ID"]] == "H20.33.001", c("Cell ID", cols_keep)], 
-  keep.rownames = TRUE
+i <- spat_donors[1]
+a <- data.table(sc$X[sc$obs[["Donor ID"]] == i,], keep.rownames = TRUE)
+b <- data.table(
+  sc$obs[sc$obs[["Donor ID"]] == i, c("Cell ID", cols_keep)], 
+  keep.rownames = "cell_ID"
 )
-
+# checked and `spatial` is the same as `X_spatial_raw`
+c <- data.table(sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i,])
 
 # set_giotto_python_path(python_path = python_path, verbose = TRUE)
 # by directly saving plots, but not rendering them you will save a lot of time
@@ -150,9 +153,12 @@ instrs <- createGiottoInstructions(
 gobjs <- lapply(spat_donors, function(i) {
   # Create Giotto object
   createGiottoObject(
-    expression = sc$X[[]],
-    spatial_locs = sc$obsm[["X_spatial_raw"]], # spatial locations of cells
-    cell_metadata = sc$obs[[]],
+    expression = t(sc$X[sc$obs[["Donor ID"]] == i,]), 
+    spatial_locs = sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i,],
+    cell_metadata = data.table(
+      sc$obs[sc$obs[["Donor ID"]] == i, cols_keep],
+      keep.rownames = "cell_ID"
+    ),
     instructions = instrs
   )
 })

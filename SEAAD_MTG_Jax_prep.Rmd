@@ -10,13 +10,36 @@ library(Seurat)
 library(anndata)
 # library(anndataR)
 library(data.table)
+
+# In Rstudio both add giotto_env to LD and configure newer GEOS to work
+Sys.unsetenv("RETICULATE_PYTHON")
+Sys.setenv(
+  LD_LIBRARY_PATH = paste0(
+    "/labs/flongo/reference/envs/giotto_env/lib:",
+    "/scg/apps/software/GEOS/3.11.1/lib64:",
+    Sys.getenv("LD_LIBRARY_PATH")
+  )
+)
+dyn.load("/scg/apps/software/GEOS/3.11.1/lib64/libgeos.so.3.11.1")
+dyn.load("/scg/apps/software/GEOS/3.11.1/lib64/libgeos_c.so")
+
+reticulate::use_python(
+  required = TRUE, 
+  python = "/labs/flongo/reference/envs/giotto_env/bin/python"
+)
+reticulate::use_condaenv(
+  condaenv = "/labs/flongo/reference/envs/giotto_env/bin/python",
+  conda = "~/miniconda3/condabin/conda"
+)
+
+
 library(Giotto)
 library(qs)
 
 ```
 
 ## Look at the metadata
-```{r}
+```{r, get_meta}
 # read in metadata 
 meta <- data.table(readxl::read_xlsx("Supplementary Table 1.xlsx"))
 meta <- meta[`snRNA-seq` == "Y" & MERFISH2 == "Y"]
@@ -119,7 +142,8 @@ sc <- JoinLayers(sc)
 
 # Save output
 saveRDS(sc, file = paste("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds", sep = "."))
-
+remove(sc)
+gc()
 
 ```
 
@@ -132,14 +156,14 @@ saveRDS(sc, file = paste("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds", sep = ".")
 # read in
 cols_keep <- cols_keep[!cols_keep %in% c("Neurotypical reference", "APOE Genotype")]
 sc <- read_h5ad("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
-i <- spat_donors[1]
-a <- data.table(sc$X[sc$obs[["Donor ID"]] == i,], keep.rownames = TRUE)
-b <- data.table(
-  sc$obs[sc$obs[["Donor ID"]] == i, c("Cell ID", cols_keep)], 
-  keep.rownames = "cell_ID"
-)
-# checked and `spatial` is the same as `X_spatial_raw`
-c <- data.table(sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i,])
+# i <- spat_donors[1]
+# a <- data.table(sc$X[sc$obs[["Donor ID"]] == i,], keep.rownames = TRUE)
+# b <- data.table(
+#   sc$obs[sc$obs[["Donor ID"]] == i, c("Cell ID", cols_keep)], 
+#   keep.rownames = "cell_ID"
+# )
+# # checked and `spatial` is the same as `X_spatial_raw`
+# c <- data.table(sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i,])
 
 # set_giotto_python_path(python_path = python_path, verbose = TRUE)
 # by directly saving plots, but not rendering them you will save a lot of time
@@ -153,10 +177,10 @@ instrs <- createGiottoInstructions(
 gobjs <- lapply(spat_donors, function(i) {
   # Create Giotto object
   createGiottoObject(
-    expression = t(sc$X[sc$obs[["Donor ID"]] == i,]), 
-    spatial_locs = sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i,],
+    expression = t(sc$X[sc$obs[["Donor ID"]] == i & !is.na(sc$obs[["Merscope"]]),]), 
+    spatial_locs = sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i & !is.na(sc$obs[["Merscope"]]),],
     cell_metadata = data.table(
-      sc$obs[sc$obs[["Donor ID"]] == i, cols_keep],
+      sc$obs[sc$obs[["Donor ID"]] == i & !is.na(sc$obs[["Merscope"]]), cols_keep],
       keep.rownames = "cell_ID"
     ),
     instructions = instrs

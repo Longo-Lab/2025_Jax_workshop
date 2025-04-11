@@ -178,9 +178,9 @@ de[p_val_adj < 0.05, .N, by = Subclass]
 
 ```
 
-However, when doing differential expression it is important to consider that testing thousands of cells can inflate estimates of significance. Do you have a highly significant change with an `avg_log2FC` of 0.10 in less than 10% of your cell type (`pct.1` and `pct.2`). That may not reflect biologically relevant variability. 
+However, when doing differential expression it is important to consider that testing thousands of cells can inflate estimates of significance. Do you have a highly significant change with an `avg_log2FC` of 0.10 in less than 10% of your cell type (`pct.1` and `pct.2`). That may not reflect biologically relevant variability. In general you can limit this with certain options like limiting `max.cells.per.ident` for your comparisons. 
 
-In general you can limit this with certain options like limiting `max.cells.per.ident` for your comparisons, but the [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-analysis-after-pseudobulking) method is to construct pseudo-bulk datasets for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. Try for n >= 6 per group.
+The [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-analysis-after-pseudobulking) method is to construct pseudo-bulk datasets for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. In our case even with n == 6 per group there are only two DE genes in any cells...
 ```{r, sc_de_pseudo}
 # # using pseudobulk analysis to control for within-sample correlation -----------
 # pseudo <- AggregateExpression(sc, 

@@ -10,7 +10,8 @@ library(Seurat)
 library(anndata)
 # library(anndataR)
 library(data.table)
-
+library(Giotto)
+library(qs)
 
 ```
 
@@ -124,7 +125,78 @@ saveRDS(sc, file = paste("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds", sep = ".")
 
 ## Prep the (cleaned MERFISH data)
 ```{r}
+# turns out there is some issue with the way rstudio uses reticulate that this 
+# will only work inside R, because who the hell knows why  https://github.com/dynverse/anndata/issues/15 
+# i don't really want to play around with reticulate and break it just to get it to maybe work for rstudio
+
+# read in
 sc <- read_h5ad("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
+data.table(sc$X[sc$obs[["Donor ID"]] == "H20.33.001",], keep.rownames = TRUE)
+data.table(
+  sc$obs[sc$obs[["Donor ID"]] == "H20.33.001", c("Cell ID", cols_keep)], 
+  keep.rownames = TRUE
+)
+
+
+# set_giotto_python_path(python_path = python_path, verbose = TRUE)
+# by directly saving plots, but not rendering them you will save a lot of time
+instrs <- createGiottoInstructions(
+  save_plot = TRUE,
+  show_plot = FALSE, 
+  return_plot = FALSE
+)
+
+# load each sample into a separate giotto object
+gobjs <- lapply(spat_donors, function(i) {
+  # Create Giotto object
+  createGiottoObject(
+    expression = sc$X[[]],
+    spatial_locs = sc$obsm[["X_spatial_raw"]], # spatial locations of cells
+    cell_metadata = sc$obs[[]],
+    instructions = instrs
+  )
+})
+
+# shift each slide to the bottom-left most global coords (0,0) prior to merging
+gobjs <- lapply(gobjs, function(i) {
+  coords <- ext(i)
+  spatShift(i, dx = -coords$xmin, dy = -coords$ymin)
+})
+
+# merge the slides together
+ad <- joinGiottoObjects(
+  gobjs[4:6],
+  gobject_names = spat_donors[4:6],
+  join_method = "shift",
+  x_shift = NULL,
+  y_shift = NULL,
+  x_padding = 1000,
+  y_padding = NULL,
+  verbose = TRUE
+)
+ctrl <- joinGiottoObjects(
+  gobjs[1:3],
+  gobject_names = spat_donors[1:3],
+  join_method = "shift",
+  x_shift = NULL,
+  y_shift = NULL,
+  x_padding = 1000,
+  y_padding = NULL,
+  verbose = TRUE
+)
+
+# save to giotto folder output
+saveGiotto(ad, 
+  foldername = 'SEAAD_MTG_MERFISH.2024-12-11.ad.giotto_obj', 
+  method = 'qs', 
+  overwrite = FALSE
+)
+saveGiotto(ctrl, 
+  foldername = 'SEAAD_MTG_MERFISH.2024-12-11.ctrl.giotto_obj', 
+  method = 'qs', 
+  overwrite = FALSE
+)
+
 
 
 

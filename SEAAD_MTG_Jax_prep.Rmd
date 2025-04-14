@@ -165,6 +165,18 @@ sc <- read_h5ad("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
 # # checked and `spatial` is the same as `X_spatial_raw`
 # c <- data.table(sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i,])
 
+# choose one section per sample
+set.seed(123)
+sects <- unique(
+  data.table(
+    sc$obs[
+      sc$obs[["Donor ID"]] %in% spat_donors & !is.na(sc$obs[["Merscope"]]), 
+      c("Donor ID", "Merscope", "Section")
+    ]
+  )
+)
+sects <- sects[sects[ , .I[sample(.N, 1)], by = "Donor ID"]$V1, Section]
+
 # set_giotto_python_path(python_path = python_path, verbose = TRUE)
 # by directly saving plots, but not rendering them you will save a lot of time
 instrs <- createGiottoInstructions(
@@ -177,14 +189,36 @@ instrs <- createGiottoInstructions(
 gobjs <- lapply(spat_donors, function(i) {
   # Create Giotto object
   createGiottoObject(
-    expression = t(sc$X[sc$obs[["Donor ID"]] == i & !is.na(sc$obs[["Merscope"]]),]), 
-    spatial_locs = sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i & !is.na(sc$obs[["Merscope"]]),],
+    expression = t(
+      sc$X[
+        sc$obs[["Donor ID"]] == i 
+        & sc$obs[["Section"]] %in% sects 
+        & !is.na(sc$obs[["Merscope"]]),
+      ]
+    ), 
+    spatial_locs = sc$obsm[['X_spatial_raw']][
+      sc$obs[["Donor ID"]] == i 
+      & sc$obs[["Section"]] %in% sects
+      & !is.na(sc$obs[["Merscope"]]),
+    ],
     cell_metadata = data.table(
-      sc$obs[sc$obs[["Donor ID"]] == i & !is.na(sc$obs[["Merscope"]]), cols_keep],
+      sc$obs[
+        sc$obs[["Donor ID"]] == i 
+        & sc$obs[["Section"]] %in% sects
+        & !is.na(sc$obs[["Merscope"]]),
+        cols_keep
+      ],
       keep.rownames = "cell_ID"
     ),
     instructions = instrs
   )
+})
+
+# rotate each to the same orientation
+# spatPlot(spin(gobjs[[1]], -62), cell_color = "Subclass")
+spins <- c(-62, -59, 155, -164, 57, 165) 
+gobjs <- lapply(seq(gobjs), function(i) {
+  spin(gobjs[[i]], angle = spins[i])
 })
 
 # shift each slide to the bottom-left most global coords (0,0) prior to merging
@@ -215,6 +249,16 @@ ctrl <- joinGiottoObjects(
   verbose = TRUE
 )
 
+lapply(c("ad", "ctrl"), function(i){
+  spatPlot(get(i), 
+    cell_color = "Subclass", 
+    point_size = 1.5,
+    save_param = list(
+      save_name = paste(i, "spatPlot2D", sep = ".")
+    )
+  )
+})
+
 # save to giotto folder output
 saveGiotto(ad, 
   foldername = 'SEAAD_MTG_MERFISH.2024-12-11.ad.giotto_obj', 
@@ -226,8 +270,6 @@ saveGiotto(ctrl,
   method = 'qs', 
   overwrite = FALSE
 )
-
-
 
 
 ```

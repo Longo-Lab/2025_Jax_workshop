@@ -176,6 +176,9 @@ setnames(de, "rn", "Symbol")
 # How many DE genes do we have?
 de[p_val_adj < 0.05, .N, by = Subclass]
 
+# Let's save it
+fwrite(de, file = "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
+
 ```
 
 However, when doing differential expression it is important to consider that testing thousands of cells can inflate estimates of significance. Do you have a highly significant change with an `avg_log2FC` of 0.10 in less than 10% of your cell type (`pct.1` and `pct.2`). That may not reflect biologically relevant variability. In general you can limit this with certain options like limiting `max.cells.per.ident` for your comparisons. 

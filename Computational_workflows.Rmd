@@ -293,17 +293,128 @@ Spatial data of either type can be evaluated in four conceptual frameworks (so f
 
 More types of analysis are still developing, and the space can be described as 
 
+
 # Spatial analysis (interactive)
 Part of the reason we chose the SEA-AD dataset as a reference, is because we can work on the same Donor samples across multiple technologies. The Allen Inst. included MERFISH data for the same region, MTG, for many participants, including our twelve folks. That way, we can do some compare/contrasting of the two datasets. 
-## Set up the data
-```{r}
-```
-## Clean and prep
-```{r}
 
+
+## Set up the data
+As with before, there are some global settings to include, and lets load things into memory.
+```{r}
+# lets save some space in memory
+remove(sc)
+gc()
+
+
+# define some global parameters (should still be similar to above)
+# do you have multiple conditions to integrate?
+integ <- TRUE
+# what column name contains the groups you are integrating?
+g_col <- 'Cognitive.Status' 
+
+
+# lets load in our giotto datasets
+ctrl <- loadGiotto("SEAAD_MTG_MERFISH.2024-12-11.ctrl.giotto_obj/")
+ad <- loadGiotto("SEAAD_MTG_MERFISH.2024-12-11.ad.giotto_obj/")
+
+# move to the Data prep notebook
+ad@cell_metadata$cell$rna$`Donor ID` <- factor(ad@cell_metadata$cell$rna$`Donor ID`) 
+ctrl@cell_metadata$cell$rna$`Donor ID` <- factor(ctrl@cell_metadata$cell$rna$`Donor ID`) 
+
+```
+## Check-in
+So we can examine the Giotto object in detail, it is based on the [terra](https://rspatial.github.io/terra/index.html) spatial data package, and makes for objects that can store many different [types](https://drieslab.github.io/Giotto_website/articles/structure.html#giotto-object-structure) of information:
+
+```{r, update_giotto}
+# what am i?
+ad
+
+# Giotto objects have instructions that save default settings
+instructions(ad)
+
+# Lets update those
+instructions(ad, param = c("save_dir", "save_plot", "show_plot")) <- list(getwd(), FALSE, TRUE)
+instructions(ctrl, param = c("save_dir", "save_plot", "show_plot")) <- list(getwd(), FALSE, TRUE)
+
+```
+Another potential benefit is that certain spatial technologies allow immunostained images to be underlayed behind your cell labels, for very cool images plotting your rna transcripts on the real image!
+
+```{r, test_picture}
+
+```
+Sadly, our data will limit rna counts to the cell level, where each point is a cell with ~ 180 gene expresson values.
+
+Rather than use all 12 donors for this example, we have the three most normal and three highest `Overall AD neuropathological change`. To get these from the overall dataset takes some work, but for now lets examine how they look in space. Prompt: Do you see any notable spatial features?  
+```{r, init_spatplot}
+p_list <- lapply(c("ad", "ctrl"), function(i){
+  spatPlot(get(i), 
+    cell_color = "Subclass",
+    title = i,
+    point_size = 1,
+    cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet")),
+    save_plot = FALSE,
+    return_plot = TRUE
+  )
+})
+wrap_plots(p_list) + plot_layout(guides = 'collect', nrow = 2)
+
+```
+Each of these blocks represents a section through the cortex, from L1 --> white matter at the bottom.
+Layers of neurons tend to be easily recognized transcriptomically, and this has been the case across multiple datasets (Yao 2021, Yao 2024, Lots more can be included). This actually extends to brain regions as well, as the Allen Institute's recent series of papers (Yao 2024, Merscope paper 2024). This can make it sort of easy to compare Layers between single-cell RNAseq and spatial RNAseq, though there is no replacement for the actual spatial information.
+
+Bonus: How would I identify the `Donor ID` if I was trying to look at it?
+
+
+## Remember our steps
+Thinking back to the single-cell data, there were a series of steps:
+
+1. Clean the data (not included) - see tools like SoupX, DoubletFinder, etc
+2. ~~(Optional) Integrate datasets, if multiple~~
+3. Normalize & Scale
+4. Calculate Principal Components
+5. Find Neighbors
+6. Find Clusters
+7. Run UMAP
+
+Do those still apply for spatial data? 
+
+For the most part, excepting that we are analyzing the ad and ctrl data separately, so there is no integration step. We also can actually use spatial information in our Neighbors/Clusters step to make our clustering more constrained to spatial zones.
+
+
+## Clean and prep
+This data has already been cleaned/filtered a fair bit by the SEA-AD group, but for informational purposes, lets look first at what a giotto object is and then filter/normalize  
+```{r, spat_filter_norm}
+# For our AD set ---------------
+# filter out cells with too few features, or features in too few cells
+ad <- filterGiotto(ad, feat_det_in_min_cells = 5, min_det_feats_per_cell = 5)
+# normalize using scale factor (depends on the technology)
+ad <- normalizeGiotto(ad, scalefactor = 10000, verbose = TRUE)
+# calculate feature and cell statistics on normalized data
+ad <- addStatistics(ad, expression_values = "normalized")
+# adjust the "custom" slot for noramlized data w/o batch effects
+ad <- adjustGiottoMatrix(ad, batch_columns = "Donor ID")
+
+# For our Control set -----------------
+ctrl %>% 
+  filterGiotto(feat_det_in_min_cells = 5, min_det_feats_per_cell = 5) %>%
+  normalizeGiotto(scalefactor = 10000, verbose = TRUE) %>%
+  addStatistics(expression_values = "normalized") %>%
+  adjustGiottoMatrix(batch_columns = "Donor ID") -> ctrl
+
+
+```
+
+Now that our normalized data is ready, lets make some clusters in the spatial style:
+```{r, spat_cluster}
+```
+
+But we can actually incorporate spatial information in those clusters.
+```{r, }
+# if there is time, this takes a while 
 ```
 
 ## Cell type annotations
+The dataset already has well characterized cell types included, but let us take a look at the standard workflow for marker genes for identifying clusters. First, 
 ```{r}
 
 ```

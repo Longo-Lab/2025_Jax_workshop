@@ -214,6 +214,11 @@ gobjs <- lapply(spat_donors, function(i) {
   )
 })
 
+# cleanup anndata (may need to restart R session if lagging too badly)
+remove(sc)
+saveRDS(gobjs, file = "temp_gobjs.rds")
+# gobjs <- readRDS("temp_gobjs.rds")
+
 # rotate each to the same orientation
 # spatPlot(spin(gobjs[[1]], -62), cell_color = "Subclass")
 spins <- c(-62, -59, 155, -164, 57, 165) 
@@ -232,9 +237,9 @@ ad <- joinGiottoObjects(
   gobjs[4:6],
   gobject_names = spat_donors[4:6],
   join_method = "shift",
-  x_shift = NULL,
+  x_shift = c(0, 3400, 6100),
   y_shift = NULL,
-  x_padding = 1000,
+  x_padding = NULL,
   y_padding = NULL,
   verbose = TRUE
 )
@@ -242,9 +247,9 @@ ctrl <- joinGiottoObjects(
   gobjs[1:3],
   gobject_names = spat_donors[1:3],
   join_method = "shift",
-  x_shift = NULL,
+  x_shift = c(0, 2300, 5600),
   y_shift = NULL,
-  x_padding = 1000,
+  x_padding = NULL,
   y_padding = NULL,
   verbose = TRUE
 )
@@ -252,7 +257,8 @@ ctrl <- joinGiottoObjects(
 lapply(c("ad", "ctrl"), function(i){
   spatPlot(get(i), 
     cell_color = "Subclass", 
-    point_size = 1.5,
+    point_size = 1,
+    cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet")),
     save_param = list(
       save_name = paste(i, "spatPlot2D", sep = ".")
     )

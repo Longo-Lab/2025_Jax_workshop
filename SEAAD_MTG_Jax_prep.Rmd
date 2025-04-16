@@ -254,6 +254,11 @@ ctrl <- joinGiottoObjects(
   verbose = TRUE
 )
 
+# drop extra levels of each factor
+ad@cell_metadata$cell$rna$`Donor ID` <- factor(ad@cell_metadata$cell$rna$`Donor ID`) 
+ctrl@cell_metadata$cell$rna$`Donor ID` <- factor(ctrl@cell_metadata$cell$rna$`Donor ID`) 
+
+# plot to see
 lapply(c("ad", "ctrl"), function(i){
   spatPlot(get(i), 
     cell_color = "Subclass", 

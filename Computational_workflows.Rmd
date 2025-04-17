@@ -12,13 +12,18 @@ output:
 
 ```{r, load_up, include = FALSE}
 # knitr options
+knitr::opts_chunk$set(
+  error = TRUE # do not interrupt in case of errors
+)
 
 # packages to load
-library(Seurat) # uses DESeq2 and MAST
+library(Seurat) # uses presto, MAST, and DESeq2
 library(ggplot2)
 library(data.table)
 library(Giotto)
 library(patchwork)
+# library(future) # should be installed by Seurat
+# library(liana)
 
 ```
 # Introductory concepts (lecture)
@@ -300,7 +305,7 @@ Part of the reason we chose the SEA-AD dataset as a reference, is because we can
 
 ## Set up the data
 As with before, there are some global settings to include, and lets load things into memory.
-```{r}
+```{r, init_giotto}
 # lets save some space in memory
 remove(sc)
 gc()
@@ -318,10 +323,11 @@ resi <- 0.4
 
 
 # lets load in our giotto datasets
-gobjs <- list(
-  ad = loadGiotto("SEAAD_MTG_MERFISH.2024-12-11.ad.giotto_obj/"),
-  ctrl = loadGiotto("SEAAD_MTG_MERFISH.2024-12-11.ctrl.giotto_obj/")
+fh <- list(
+  ad = "SEAAD_MTG_MERFISH.2024-12-11.ad.giotto_obj",
+  ctrl = "SEAAD_MTG_MERFISH.2024-12-11.ctrl.giotto_obj"
 )
+gobjs <- lapply(fh, loadGiotto)
 
 # move to the Data prep notebook
 gobjs <- lapply(gobjs, function(i) {
@@ -330,6 +336,8 @@ gobjs <- lapply(gobjs, function(i) {
 })
   
 ```
+
+
 ## Check-in
 So we can examine the Giotto object in detail, it is based on the [terra](https://rspatial.github.io/terra/index.html) spatial data package, and makes for objects that can store many different [types](https://drieslab.github.io/Giotto_website/articles/structure.html#giotto-object-structure) of information:
 
@@ -419,7 +427,7 @@ gobjs <- lapply(gobjs, function(i){
     runPCA(
       expression_values = "custom",
       scale_unit = FALSE, 
-      feats_to_use = rownames(ad)[!rownames(ad) %like% "Blank"] # don't include blanks
+      feats_to_use = rownames(gobjs[[1]])[!rownames(gobjs[[1]]) %like% "Blank"] # don't include blanks
     ) %>%
     # screePlot() %>% # with this few genes, 8 pcs is sufficient
     runUMAP(expression_values = "custom", dimensions_to_use = 1:pcs) -> i
@@ -428,7 +436,7 @@ gobjs <- lapply(gobjs, function(i){
 ```
 
 But we can actually incorporate spatial information in those clusters. Leiden clustering makes use of a spatial nearest neighbor network when clustering cells. 
-```{r, }
+```{r, spat_network}
 gobjs <- lapply(gobjs, function(i){
   i %>%
     # Create a sNN network (default)
@@ -482,10 +490,20 @@ wrap_plots(c(p_list_1, p_list_2)) + plot_layout(nrow = 2)
 ```
 Additionally, Leiden clustering in Giotto has the ability to `doLeidenSubCluster` on individual clusters to more finely split them up without changing the overall cluster resolution. This can allow you to subdivide more heterogeneous populations dynamically as needed.   
 
+From this point on, we can also save the Giotto objects, as we won't be modifying it anymore, just analyzing it.
+```{r, save_giotto}
+lapply(names(gobjs), function(i){
+  saveGiotto(gobjs[[i]],
+    foldername = fh[[i]],
+    method = 'qs',
+    overwrite = TRUE
+  )
+})
+```
 
 ## Cell type annotations
 The dataset already has well characterized cell types included, but let us take a look at the standard workflow for marker genes for identifying clusters. First, 
-```{r}
+```{r, spat_annots}
 # find gini markers (can also use scran or Mast)
 markers_gini <- lapply(gobjs, function(i){
   findMarkers_one_vs_all(i,
@@ -521,7 +539,7 @@ wrap_plots(p_list)
 
 ## Spatial genes
 Find spatially organized gene expression by examining the binarized expression of cells and their spatial neighbors.
-```{r}
+```{r, spat_genes}
 # identify spatial genes
 spat_feats <- lapply(gobjs, binSpect, expression_values = "custom")
 
@@ -533,49 +551,55 @@ comb_feats <- merge(
   suffixes = c('.ad', '.ctrl')
 )
 comb_feats[, score.diff := score.ad - score.ctrl]
-comb_feats[order(-abs(score.diff))][1:4, feats]
+comb_feats[, est.diff := estimate.ad - estimate.ctrl]
+comb_feats[, rel.diff := (estimate.ad - estimate.ctrl)/((estimate.ad + estimate.ctrl)/2)]
+
+# top differences that have significant DE in snRNAseq
+comb_feats[order(-abs(score.diff))][feats %in% unique(de[p_val_adj < 0.05 & Subclass == "L2/3 IT", Symbol])]
+top <- "KIRREL3"
 
 # plot the top four score changes between groups
 p_list <- lapply(names(gobjs), function(i) {
   spatFeatPlot2D(gobjs[[i]],
     expression_values = "scaled", 
-    feats = comb_feats[order(-abs(score.diff))][1:4, feats],
+    feats = top,
     point_shape = "border", 
     point_border_stroke = 0.1,
     show_network = FALSE, 
     network_color = "lightgrey", 
     point_size = 1,
+    scale_alpha_with_expression = FALSE,
     # legend_text = 4,
     cow_n_col = 1,
     # cow_rel_w = 3,
     save_plot = FALSE,
     return_plot = TRUE
-  ) + ggtitle(i)
+  ) + scale_color_distiller(name = "RdBu", limits = c(-3, 3)) + ggtitle(paste(i, top))
 })
-wrap_plots(p_list) + plot_layout(guides = "collect")
+wrap_plots(p_list) + gt::gt(de[Symbol == top][order(p_val_adj)]) + plot_layout(nrow = 2, guides = 'collect')
 
 ```
 
 ## Cell proximity
-```{r}
-cell_proximities <- cellProximityEnrichment(gobject = SS_seqfish,
-                                            cluster_column = "cell_types",
-                                            spatial_network_name = "Delaunay_network",
-                                            adjust_method = "fdr",
-                                            number_of_simulations = 2000
+```{r, spat_prox}
+cell_prox <- lapply(gobjs, cellProximityEnrichment, 
+  cluster_column = "Subclass",
+  adjust_method = "fdr"
 )
 
-## barplot
-cellProximityBarplot(gobject = SS_seqfish,
-                     CPscore = cell_proximities,
-                     min_orig_ints = 5, 
-                     min_sim_ints = 5
-)
+# barplot
+p_list <- lapply(names(gobjs), function(i) {
+  cellProximityBarplot(gobjs[[i]],
+    CPscore = cell_prox[[i]],
+    save_plot = FALSE,
+    return_plot = TRUE
+  )
+})
+
 ```
 
 ## Interaction changed features
-```{r}
-library(future)
+```{r, spat_icf}
 
 ## select top 25th highest expressing genes
 gene_metadata <- fDataDT(SS_seqfish)

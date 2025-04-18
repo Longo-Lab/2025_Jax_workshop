@@ -22,7 +22,8 @@ library(ggplot2)
 library(data.table)
 library(Giotto)
 library(patchwork)
-# library(future) # should be installed by Seurat
+library(future) # should be installed by Seurat
+library(RobustRankAggreg)
 # library(liana)
 
 ```
@@ -313,9 +314,11 @@ gc()
 
 # define some global parameters (should still be similar to above)
 # do you have multiple conditions to integrate?
-integ <- FALSE
+integ <- TRUE
 # what column name contains the groups you are integrating?
-g_col <- 'Cognitive.Status' 
+g_col <- 'Donor ID' 
+donors <- c("H20.33.035", "H21.33.023", "H20.33.012", "H20.33.040", "H20.33.004", "H21.33.031")
+status <- c(rep("ctrl", 3), rep("ad", 3))
 # how many principal components do you wish to use?
 pcs <- 8
 # what clustering resolution? 
@@ -323,18 +326,8 @@ resi <- 0.4
 
 
 # lets load in our giotto datasets
-fh <- list(
-  ad = "SEAAD_MTG_MERFISH.2024-12-11.ad.giotto_obj",
-  ctrl = "SEAAD_MTG_MERFISH.2024-12-11.ctrl.giotto_obj"
-)
-gobjs <- lapply(fh, loadGiotto)
+gobj <- loadGiotto("SEAAD_MTG_MERFISH.2024-12-11.giotto_obj")
 
-# move to the Data prep notebook
-gobjs <- lapply(gobjs, function(i) {
-  i@cell_metadata$cell$rna$`Donor ID` <- factor(i@cell_metadata$cell$rna$`Donor ID`) 
-  return(i)
-})
-  
 ```
 
 
@@ -343,18 +336,15 @@ So we can examine the Giotto object in detail, it is based on the [terra](https:
 
 ```{r, update_giotto}
 # what am i?
-gobjs$ad
+gobj
 
 # Giotto objects have instructions that save default settings
-instructions(gobjs$ad)
+instructions(gobj)
 
 # Lets update those
-gobjs <- lapply(gobjs, function(i) {
-  instructions(i, 
-    param = c("save_dir", "save_plot", "return_plot")
-  ) <- list(getwd(), FALSE, TRUE)
-  return(i)
-})
+instructions(gobj, 
+  param = c("save_dir", "save_plot", "return_plot")
+) <- list(getwd(), FALSE, TRUE)
 
 ```
 Another potential benefit is that certain spatial technologies allow immunostained images to be underlayed behind your cell labels, for very cool images plotting your rna transcripts on the real image!
@@ -366,17 +356,13 @@ Sadly, our data will limit rna counts to the cell level, where each point is a c
 
 Rather than use all 12 donors for this example, we have the three most normal and three highest `Overall AD neuropathological change`. To get these from the overall dataset takes some work, but for now lets examine how they look in space. Prompt: Do you see any notable spatial features?  
 ```{r, init_spatplot}
-p_list <- lapply(names(gobjs), function(i){
-  spatPlot(gobjs[[i]], 
-    cell_color = "Subclass",
-    title = i,
-    point_size = 1,
-    cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet")),
-    save_plot = FALSE,
-    return_plot = TRUE
-  )
-})
-wrap_plots(p_list) + plot_layout(guides = 'collect', nrow = 2)
+p <- spatPlot(gobj, 
+  cell_color = "Subclass",
+  point_size = 1,
+  cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet"))
+)
+p + labs(subtitle = paste(donors, collapse = "       ")) + 
+  theme(legend.position = 'bottom', plot.subtitle = element_text(hjust = 0.5))
 
 ```
 Each of these blocks represents a section through the cortex, from L1 --> white matter at the bottom.
@@ -404,145 +390,140 @@ For the most part, excepting that we are analyzing the ad and ctrl data separate
 ## Clean and prep
 This data has already been cleaned/filtered a fair bit by the SEA-AD group, but for informational purposes, lets look first at what a giotto object is and then filter/normalize  
 ```{r, spat_filter_norm}
-gobjs <- lapply(gobjs, function(i){
-  i %>% 
-    # filter out cells with too few features, or features in too few cells
-    filterGiotto(feat_det_in_min_cells = 5, min_det_feats_per_cell = 5) %>%
-    # normalize using scale factor (depends on the technology)
-    normalizeGiotto(scalefactor = 10000, verbose = TRUE) %>%
-    # calculate feature and cell statistics on normalized data
-    addStatistics(expression_values = "normalized") %>%
-    # adjust the "custom" slot for normalized data w/o batch effects
-    adjustGiottoMatrix(batch_columns = "Donor ID") -> i
-})
+gobj %>% 
+  # filter out cells with too few features, or features in too few cells
+  filterGiotto(feat_det_in_min_cells = 5, min_det_feats_per_cell = 5) %>%
+  # normalize using scale factor (depends on the technology)
+  normalizeGiotto(scalefactor = 10000, verbose = TRUE) %>%
+  # calculate feature and cell statistics on normalized data
+  addStatistics(expression_values = "normalized") %>%
+  # with MERSCOPE there are very few genes, so we specify highly variable features to use
+  calculateHVF(method = "var_p_resid", var_number = 120, show_plot = TRUE) -> gobj
 
 ```
 
-Now that our normalized data is ready, lets make some clusters in the spatial style. A notable difference with other platforms like CosMx/Xenium/scRNAseq is that there are too few genes to need to selev the most variable genes, which can be calculated using `calculateHVF`
+Now that our normalized data is ready, lets make some clusters in the spatial style. A notable difference with other platforms like CosMx/Xenium/scRNAseq is that there are few total genes. So automated selection of variable genes for principal components doesn't work. We can specify a theshold using `calculateHVF`. We also need to integrate our **all** of our sample slides using Harmony.
 ```{r, spat_cluster}
-# For our AD set ---------------
-gobjs <- lapply(gobjs, function(i){
-  i %>% 
-    # with MERSCOPE there are very few genes, so we don't calculate highly variable features
-    runPCA(
-      expression_values = "custom",
-      scale_unit = FALSE, 
-      feats_to_use = rownames(gobjs[[1]])[!rownames(gobjs[[1]]) %like% "Blank"] # don't include blanks
-    ) %>%
-    # screePlot() %>% # with this few genes, 8 pcs is sufficient
-    runUMAP(expression_values = "custom", dimensions_to_use = 1:pcs) -> i
-})
+gobj %>% 
+  runPCA() %>%
+  # screePlot() %>% # with this few genes, 8 pcs is sufficient
+  runGiottoHarmony(
+    vars_use = g_col,
+    dimensions_to_use = 1:pcs,
+  ) %>%
+  runUMAP(
+    dim_reduction_name = "harmony", 
+    dim_reduction_to_use = "harmony",
+    name = "umap_harmony",
+    dimensions_to_use = 1:pcs) -> gobj
 
 ```
 
-But we can actually incorporate spatial information in those clusters. Leiden clustering makes use of a spatial nearest neighbor network when clustering cells. 
+When clustering with spatial data, we can actually incorporate spatial information in those clusters. Leiden clustering makes use of a spatial nearest neighbor network when clustering cells. The [workshop](https://drieslab.github.io/giotto_workshop_2024/working-with-multiple-samples.html#analyzing-joined-objects) from the Giotto group actually shows what happens if you don't integrate your datasets with two slides, the major groupings are actually the slides themselves! 
 ```{r, spat_network}
-gobjs <- lapply(gobjs, function(i){
-  i %>%
-    # Create a sNN network (default)
-    createNearestNetwork(
-      dimensions_to_use = 1:pcs, 
-      k = 15, 
-      expression_values = "custom"
-    ) %>%
-    # Create spatial network based on physical distance of cell centroids
-    createSpatialNetwork(minimum_k = 2) %>%
-    # Create a sNN network (default)
-    doLeidenCluster(
-      resolution = resi, 
-      name = paste0("leiden_", resi)
-    ) -> i
-})
+gobj %>%
+  # Create a sNN network (default)
+  createNearestNetwork(dimensions_to_use = 1:pcs, k = 15) %>%
+  # Perform clustering
+  doLeidenCluster(resolution = resi, name = paste0("leiden_", resi)) -> gobj
 
 # Plot the clusters upon the UMAP
-p_list_1 <- lapply(names(gobjs), function(i){
-  plotUMAP(gobjs[[i]], 
-    cell_color = paste0("leiden_", resi),
-    title = i,
-    point_size = 1,
-    show_NN_network = TRUE,
-    show_legend = FALSE,
-    cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet")),
-    save_plot = FALSE,
-    return_plot = TRUE
-  )
-})
+p1 <- plotUMAP(gobj, 
+  cell_color = paste0("leiden_", resi),
+  title = paste0("leiden_", resi),
+  point_size = 1,
+  dim_reduction_name = "umap_harmony",
+  show_NN_network = TRUE,
+  show_legend = FALSE,
+  cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet"))
+)
 
 # Plot the Subclasses upon the UMAP
-p_list_2 <- lapply(names(gobjs), function(i){
-  plotUMAP(gobjs[[i]], 
-    cell_color = "Subclass",
-    title = i,
-    point_size = 1,
-    show_NN_network = TRUE,
-    show_legend = FALSE,
-    cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet")),
-    save_plot = FALSE,
-    return_plot = TRUE
-  )
-})
+p2 <- plotUMAP(gobj, 
+  cell_color = "Subclass",
+  title = "Subclass",
+  point_size = 1,
+  dim_reduction_name = "umap_harmony",
+  show_NN_network = TRUE,
+  show_legend = FALSE,
+  cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet"))
+)
 
 # plot together
-# wrap_plots(p_list_2) + plot_layout(guides = 'collect')
-wrap_plots(c(p_list_1, p_list_2)) + plot_layout(nrow = 2)
-
+p1 + p2
 
 ```
-Additionally, Leiden clustering in Giotto has the ability to `doLeidenSubCluster` on individual clusters to more finely split them up without changing the overall cluster resolution. This can allow you to subdivide more heterogeneous populations dynamically as needed.   
+
+
+Additionally, Leiden clustering in Giotto has the ability to `doLeidenSubCluster` on individual clusters to more finely split them up without changing the overall cluster resolution. This can allow you to subdivide more heterogeneous populations dynamically as needed. But for now, we can also see how the automated clustering did across the different slides:
+```{r, leid_spatplot}
+p <- spatPlot(gobj, 
+  cell_color = paste0("leiden_", resi),
+  point_size = 1,
+  cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet"))
+)
+p + labs(subtitle = paste(donors, collapse = "       ")) + 
+  theme(legend.position = 'bottom', plot.subtitle = element_text(hjust = 0.5))
+
+```
+
 
 From this point on, we can also save the Giotto objects, as we won't be modifying it anymore, just analyzing it.
 ```{r, save_giotto}
-lapply(names(gobjs), function(i){
-  saveGiotto(gobjs[[i]],
-    foldername = fh[[i]],
-    method = 'qs',
-    overwrite = TRUE
-  )
-})
+saveGiotto(gobj,
+  foldername = "SEAAD_MTG_MERFISH.2024-12-11.giotto_obj",
+  method = 'qs',
+  overwrite = TRUE
+)
+
 ```
 
 ## Cell type annotations
-The dataset already has well characterized cell types included, but let us take a look at the standard workflow for marker genes for identifying clusters. First, 
+The dataset already has well characterized cell types included, but let us take a look at the standard workflow for marker genes for identifying clusters.  
 ```{r, spat_annots}
 # find gini markers (can also use scran or Mast)
-markers_gini <- lapply(gobjs, function(i){
-  findMarkers_one_vs_all(i,
-    method = "gini",
-    expression_values = "custom",
-    cluster_column = paste0("leiden_", resi),
-    min_feats = 10
-  )
-})
+markers_gini <- findMarkers_one_vs_all(gobj,
+  method = "gini",
+  cluster_column = paste0("leiden_", resi),
+  min_feats = 10
+)
 
 # select genes for cluster heatmap
-top_gini <- lapply(markers_gini, function(i) {
-  i[!feats %like% "Blank", head(.SD, 6), by = "cluster"]
-})
+top_gini <- markers_gini[!feats %like% "Blank", head(.SD, 6), by = "cluster"]
 
-p_list <- lapply(names(gobjs), function(i) {
-  plotMetaDataHeatmap(gobjs[[i]],
-    expression_values = "custom",
-    selected_feats = unique(top_gini[[i]]$feats),
-    custom_feat_order = unique(top_gini[[i]]$feats),
-    custom_cluster_order = unique(top_gini[[i]]$cluster),
-    metadata_cols = paste0("leiden_", resi), 
-    x_text_size = 8, 
-    y_text_size = 6,
-    title = i,
-    save_plot = FALSE,
-    return_plot = TRUE
-  )
-})
-wrap_plots(p_list)
+p <- plotMetaDataHeatmap(gobj,
+  selected_feats = unique(top_gini$feats),
+  custom_feat_order = unique(top_gini$feats),
+  custom_cluster_order = unique(top_gini$cluster),
+  metadata_cols = paste0("leiden_", resi), 
+  x_text_size = 8, 
+  y_text_size = 4
+)
+p
 
 ```
 
 ## Spatial genes
-Find spatially organized gene expression by examining the binarized expression of cells and their spatial neighbors.
-```{r, spat_genes}
-# identify spatial genes
-spat_feats <- lapply(gobjs, binSpect, expression_values = "custom")
+Up until now, we have been able to look at the combined set of all slides. However, in order to understand spatial relationships it is more useful to examine each slide individually and then meta-analyze them. Otherwise we can encounter a similar problem to snRNAseq, where tens of thousands of observations overwhelm significance. Additionally, spatial relationships are going to be scored differently in joined images of multiple slides versus in isolation. So to handle this lets split them up into a list of gobjs.
+```{r, split_slides}
+#####
+```
 
+
+Now we can find spatially organized gene expression by examining the binarized expression of cells and their spatial neighbors.
+```{r, spat_genes}
+# We have to create a spatial network for each slide based on physical distance of cell centroids
+gobjs <- lapply(gobjs, createSpatialNetwork)
+
+# identify spatial genes
+spat_feats <- lapply(gobjs, binSpect)
+
+spat_feats[[1]]
+```
+
+Lastly, lets combine the stats simply. There are parameters of interest: the spatial scoref (how spatial something is), and the expression of that gene in those highly expressing groups. The first, as a rank order, can be combined using `RobustRankAgg` for each of our experimental groups. The second we want to test for a difference between ad and control groups.
+
+```{r, spat_feats_rank}
 # choose feats that differ across groups
 comb_feats <- merge(
   x = spat_feats[['ad']], 

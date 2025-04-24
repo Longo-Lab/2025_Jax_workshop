@@ -20,10 +20,11 @@ knitr::opts_chunk$set(
 library(Seurat) # uses presto, MAST, and DESeq2
 library(ggplot2)
 library(data.table)
+library(future) # should be installed by Seurat
 library(Giotto)
 library(patchwork)
-library(future) # should be installed by Seurat
 library(RobustRankAggreg)
+library(limma)
 # library(liana)
 
 ```
@@ -182,8 +183,9 @@ setnames(de, "rn", "Symbol")
 # How many DE genes do we have?
 de[p_val_adj < 0.05, .N, by = Subclass]
 
-# Let's save it
-fwrite(de, file = "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
+# # Let's save it
+# fwrite(de, file = "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
+# de <- fread("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
 
 ```
 
@@ -326,6 +328,7 @@ resi <- 0.4
 
 
 # lets load in our giotto datasets
+set_giotto_python_path()
 gobj <- loadGiotto("SEAAD_MTG_MERFISH.2024-12-11.giotto_obj")
 
 ```
@@ -455,7 +458,10 @@ p1 + p2
 ```
 
 
-Additionally, Leiden clustering in Giotto has the ability to `doLeidenSubCluster` on individual clusters to more finely split them up without changing the overall cluster resolution. This can allow you to subdivide more heterogeneous populations dynamically as needed. But for now, we can also see how the automated clustering did across the different slides:
+Additionally, Leiden clustering in Giotto has the ability to `doLeidenSubCluster` on individual clusters to more finely split them up without changing the overall cluster resolution. This can allow you to subdivide more heterogeneous populations dynamically as needed. Looking at the SEA-AD annotations, several groups (like GABAergic neuron subtypes Pvalb, Sst, etc) could be further split into subtypes. 
+
+
+But for now, we can also see how the automated clustering did across the different slides:
 ```{r, leid_spatplot}
 p <- spatPlot(gobj, 
   cell_color = paste0("leiden_", resi),
@@ -466,7 +472,7 @@ p + labs(subtitle = paste(donors, collapse = "       ")) +
   theme(legend.position = 'bottom', plot.subtitle = element_text(hjust = 0.5))
 
 ```
-
+Notably the `beige` and `copper` colored clusters that are L2/3 IT neurons are in the correct layer. The light gray set that is L4 IT neurons are a little harder to see in the picture, but are in the middle.
 
 From this point on, we can also save the Giotto objects, as we won't be modifying it anymore, just analyzing it.
 ```{r, save_giotto}
@@ -506,42 +512,71 @@ p
 ## Spatial genes
 Up until now, we have been able to look at the combined set of all slides. However, in order to understand spatial relationships it is more useful to examine each slide individually and then meta-analyze them. Otherwise we can encounter a similar problem to snRNAseq, where tens of thousands of observations overwhelm significance. Additionally, spatial relationships are going to be scored differently in joined images of multiple slides versus in isolation. So to handle this lets split them up into a list of gobjs.
 ```{r, split_slides}
-#####
-```
+gobjs <- splitGiotto(gobj, by = g_col)
 
-
-Now we can find spatially organized gene expression by examining the binarized expression of cells and their spatial neighbors.
-```{r, spat_genes}
 # We have to create a spatial network for each slide based on physical distance of cell centroids
 gobjs <- lapply(gobjs, createSpatialNetwork)
 
-# identify spatial genes
-spat_feats <- lapply(gobjs, binSpect)
+# example of a spatial networks (small window)
+smallfov <- subsetGiottoLocs(gobjs[[1]],
+    x_max = 500,
+    x_min = 0,
+    y_max = 3000,
+    y_min = 2000
+)
 
-spat_feats[[1]]
+spatPlot(smallfov, 
+  show_network = TRUE,
+  network_color = "blue",
+  point_size = 1, 
+  cell_color = "Subclass",
+  show_plot = TRUE
+)
+
 ```
 
-Lastly, lets combine the stats simply. There are parameters of interest: the spatial scoref (how spatial something is), and the expression of that gene in those highly expressing groups. The first, as a rank order, can be combined using `RobustRankAgg` for each of our experimental groups. The second we want to test for a difference between ad and control groups.
+If you don't have multiple images per group, you can rely on the default output for the single image, you will simply not have the extra layer of statistical confidence on between group differences.
+
+Now we can find spatially organized gene expression by examining the binarized expression of cells and their spatial neighbors. The full description is [here](https://drieslab.github.io/Giotto_website/reference/binSpect.html) 
+```{r, spat_genes}
+# identify spatial genes
+spat_feats <- lapply(gobjs, binSpect)
+spat_feats <- rbindlist(spat_feats, idcol = g_col)
+spat_feats <- spat_feats[!feats %like% "Blank"]
+# fwrite(spat_feats, file = "SEAAD_MTG_MERFISH.2024-12-11.spat_feats_raw.txt.gz")
+
+spat_feats
+```
+Key values in this analysis are the `score`, `av_expr`, `high_expr`:
+- `score`: `estimate * -log(p.value)`, the measure of the "spatialness of the gene"
+- `av_expr`: the average expression high-expressing genes
+- `high_expr`: the total number of high expressing genes
+
+So a simple solution is to simply look at the top ranked spatial genes, these genes have some manner of spatial grouping where the gene is most expressed, and is great for exploring tissue heterogeneity. The first, as a rank order, can be combined using `RobustRankAgg` for each of our experimental groups. The second we want to test for a difference between ad and control groups.
 
 ```{r, spat_feats_rank}
-# choose feats that differ across groups
-comb_feats <- merge(
-  x = spat_feats[['ad']], 
-  y = spat_feats[['ctrl']], 
-  by = 'feats', 
+# first, lets calculate the rank aggregate spatial score for each `status`
+agg <- merge(
+  x = aggregateRanks(
+    lapply(donors[status == 'ad'], function(i) {
+      spat_feats[order(-score)][`Donor ID` == i, feats]
+    })
+  ),
+  y = aggregateRanks(
+    lapply(donors[status == 'ctrl'], function(i) {
+      spat_feats[order(-score)][`Donor ID` == i, feats]
+    })
+  ),
+  by = 'Name',
   suffixes = c('.ad', '.ctrl')
 )
-comb_feats[, score.diff := score.ad - score.ctrl]
-comb_feats[, est.diff := estimate.ad - estimate.ctrl]
-comb_feats[, rel.diff := (estimate.ad - estimate.ctrl)/((estimate.ad + estimate.ctrl)/2)]
+setorder(agg, Score.ad, Score.ctrl)
+agg
 
-# top differences that have significant DE in snRNAseq
-comb_feats[order(-abs(score.diff))][feats %in% unique(de[p_val_adj < 0.05 & Subclass == "L2/3 IT", Symbol])]
-top <- "KIRREL3"
-
-# plot the top four score changes between groups
+# plot the top aggregate score for ad
+top <- agg[1, "Name"]
 p_list <- lapply(names(gobjs), function(i) {
-  spatFeatPlot2D(gobjs[[i]],
+  p <- spatFeatPlot2D(gobjs[[i]],
     expression_values = "scaled", 
     feats = top,
     point_shape = "border", 
@@ -549,17 +584,66 @@ p_list <- lapply(names(gobjs), function(i) {
     show_network = FALSE, 
     network_color = "lightgrey", 
     point_size = 1,
-    scale_alpha_with_expression = FALSE,
-    # legend_text = 4,
+    scale_alpha_with_expression = TRUE,
     cow_n_col = 1,
-    # cow_rel_w = 3,
     save_plot = FALSE,
     return_plot = TRUE
-  ) + scale_color_distiller(name = "RdBu", limits = c(-3, 3)) + ggtitle(paste(i, top))
+  ) 
+  p + scale_color_distiller(name = "RdBu", limits = c(-3, 3)) + ggtitle(paste(i, top))
+})
+wrap_plots(p_list) + gt::gt(de[Symbol == top][order(p_val_adj)]) + plot_layout(nrow = 2, guides = 'collect')
+
+
+```
+So the top gene is pretty highly expressed in the L2/3 layer, regardless of disease status. Even more apparent when you pop it out in a new viewer window. In fact, it appears most spatial genes have similar agg ranks in either case, which you might expect from a very layered tissue like the cortex.
+
+Now let's look at the top changing genes across the two conditions. We can use a standard DE package that can handle log transformed values like `limma`.
+```{r, spat_feats_de}
+# to test differences in average expression in high cells, use limma's lmFit ---
+# make a table of the av_expr for each Donor
+exp <- data.frame(
+  dcast(spat_feats, feats ~ `Donor ID`, value.var = 'av_expr'), 
+  row.names = 'feats'
+)
+
+# reorder and set the disease status for limma
+exp <- exp[, donors]
+design <- model.matrix(~rev(status))
+
+# sample level ad vs ctrl
+spat_lm <- as.data.table(
+  topTable(eBayes(lmFit(exp, design)), number = nrow(exp)), 
+  keep.rownames = "feats"
+) 
+
+# merge
+spat_lm <- merge(spat_lm, agg, by.x = 'feats', by.y = 'Name')
+setorder(spat_lm, adj.P.Val, P.Value)
+spat_lm
+
+# plot the top score changes between groups
+top <- spat_lm[3, feats]
+p_list <- lapply(names(gobjs), function(i) {
+  p <- spatFeatPlot2D(gobjs[[i]],
+    expression_values = "scaled", 
+    feats = top,
+    point_shape = "border", 
+    point_border_stroke = 0.1,
+    show_network = FALSE, 
+    network_color = "lightgrey", 
+    point_size = 1,
+    scale_alpha_with_expression = TRUE,
+    cow_n_col = 1,
+    save_plot = FALSE,
+    return_plot = TRUE
+  )
+  p + scale_color_distiller(name = "RdBu", limits = c(-3, 3)) + ggtitle(paste(i, top))
 })
 wrap_plots(p_list) + gt::gt(de[Symbol == top][order(p_val_adj)]) + plot_layout(nrow = 2, guides = 'collect')
 
 ```
+
+
 
 ## Cell proximity
 ```{r, spat_prox}

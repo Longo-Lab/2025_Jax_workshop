@@ -2,6 +2,8 @@
 title: "SEA-AD Prep for 2025 Jax workshop"
 author: "Robert R Butler III"
 output: html_notebook
+editor_options: 
+  chunk_output_type: inline
 ---
 
 To prep data for the workshop, it will need to be converted to Seurat & Giotto formats
@@ -48,23 +50,45 @@ meta$`Overall AD neuropathological Change` <- factor(
   meta$`Overall AD neuropathological Change`, levels = c("Not AD", "Low", "Intermediate", "High")
 )
 
+sc_meta <- fread("SEAAD_MTG_RNAseq_all-nuclei_metadata.2024-02-13.csv")
+sc_meta <- unique(sc_meta[, .(`Donor ID`, `Continuous Pseudo-progression Score`)])
+meta <- merge(meta, sc_meta, all.x = TRUE)
+remove(sc_meta)
+gc()
+
 # subsetting for donors on extremes, without comorbidities
+view_cols <- c(
+  "Donor ID",
+  "Age at Death",
+  "Sex", 
+  "Continuous Pseudo-progression Score",
+  "Overall AD neuropathological Change",
+  "Thal",
+  "Braak",
+  "CERAD score",
+  "Overall CAA Score",
+  "Highest Lewy Body Disease",
+  "Cognitive Status",
+  "Last MMSE Score",
+  "APOE Genotype",
+  names(meta)[names(meta) %like% "Consensus Clinical Dx"]
+)
+setorderv(meta, view_cols[4])
+View(meta[, ..view_cols])
+
 donors <- meta[
   (
     `Overall AD neuropathological Change` %in% c("Not AD", "Low") 
-    & `Consensus Clinical Dx (choice=Control)` == "Checked"
-    & `Cognitive Status` == "No dementia"
-    & `Highest Lewy Body Disease` != "Limbic (Transitional)"
-    & !(`CERAD score` == "Sparse" & `Overall CAA Score` == "Moderate")
+    & `Continuous Pseudo-progression Score` < 0.35
+    & `Highest Lewy Body Disease` != "Neocortical (Diffuse)"
   )
   | (
     `Overall AD neuropathological Change` %in% c("Intermediate", "High") 
-    & `Cognitive Status` == "Dementia"
+    & `Continuous Pseudo-progression Score` > 0.6
   ),
-  
-][order(`Overall AD neuropathological Change`, Thal), `Donor ID`]
+][order(get(view_cols[4])), `Donor ID`]
 
-spat_donors <- donors[c(1:3, 10:12)]
+spat_donors <- donors[c(3, 6, 5, 10:12)]
 
 ```
 
@@ -166,7 +190,7 @@ sc <- read_h5ad("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
 # c <- data.table(sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i,])
 
 # choose one section per sample
-set.seed(123)
+set.seed(456)
 sects <- unique(
   data.table(
     sc$obs[
@@ -221,8 +245,8 @@ saveRDS(gobjs, file = "temp_gobjs.rds")
 # gobjs <- readRDS("temp_gobjs.rds")
 
 # rotate each to the same orientation
-# spatPlot(spin(gobjs[[1]], -62), cell_color = "Subclass")
-spins <- c(-62, -59, 155, -164, 57, 165) 
+# spatPlot(spin(gobjs[[6]], 0), cell_color = "Subclass", show_plot = TRUE)
+spins <- c(-85, -71, -13, -44, 6, 94) 
 gobjs <- lapply(seq(gobjs), function(i) {
   spin(gobjs[[i]], angle = spins[i])
 })
@@ -234,11 +258,12 @@ gobjs <- lapply(gobjs, function(i) {
 })
 
 # merge the slides together -----------------------------
+# lapply(gobjs, getSpatialLocations)
 gobj <- joinGiottoObjects(
   gobjs,
   gobject_names = spat_donors,
   join_method = "shift",
-  x_shift = c(0, 2300, 5600, 8100, 11500, 14200),
+  x_shift = c(0, 3700, 5900, 9200, 11700, 14800),
   y_shift = NULL,
   x_padding = NULL,
   y_padding = NULL,

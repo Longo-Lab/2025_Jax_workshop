@@ -319,8 +319,9 @@ gc()
 integ <- TRUE
 # what column name contains the groups you are integrating?
 g_col <- 'Donor ID' 
+# donors <- c("H21.33.015", "H21.33.028", "H21.33.023", "H21.33.014", "H21.33.031", "H20.33.015")
 donors <- c("H20.33.035", "H21.33.023", "H20.33.012", "H20.33.040", "H20.33.004", "H21.33.031")
-status <- c(rep("ctrl", 3), rep("ad", 3))
+status <- factor(c(rep("ctrl", 3), rep("ad", 3)), levels = c('ctrl', 'ad'))
 # how many principal components do you wish to use?
 pcs <- 8
 # what clustering resolution? 
@@ -350,12 +351,21 @@ instructions(gobj,
 ) <- list(getwd(), FALSE, TRUE)
 
 ```
-Another potential benefit is that certain spatial technologies allow immunostained images to be underlayed behind your cell labels, for very cool images plotting your rna transcripts on the real image!
-
+Another potential benefit is that certain spatial technologies allow exact RNA positioning, and immunostained images to be underlayed behind your cell labels, for very cool images at real sub-cellular resolution!
 ```{r, test_picture}
+g <- GiottoData::loadGiottoMini("cosmx", verbose = FALSE)
+spatInSituPlotPoints(g, 
+  show_image = TRUE, 
+  image_name = c("fov002-composite", "fov003-composite"),
+  feats = list(fDataDT(g)[, feat_ID]),
+  point_size = 0.25,
+  show_legend = FALSE,
+  polygon_color = 'white'
+)
+
 
 ```
-Sadly, our data will limit rna counts to the cell level, where each point is a cell with ~ 180 gene expresson values.
+Sadly, our MERFISH data will limit rna counts to the cell level, where each point is a cell with ~ 180 gene expression values.
 
 Rather than use all 12 donors for this example, we have the three most normal and three highest `Overall AD neuropathological change`. To get these from the overall dataset takes some work, but for now lets examine how they look in space. Prompt: Do you see any notable spatial features?  
 ```{r, init_spatplot}
@@ -544,6 +554,7 @@ spat_feats <- lapply(gobjs, binSpect)
 spat_feats <- rbindlist(spat_feats, idcol = g_col)
 spat_feats <- spat_feats[!feats %like% "Blank"]
 # fwrite(spat_feats, file = "SEAAD_MTG_MERFISH.2024-12-11.spat_feats_raw.txt.gz")
+# spat_feats <- fread("SEAAD_MTG_MERFISH.2024-12-11.spat_feats_raw.txt.gz")
 
 spat_feats
 ```
@@ -608,7 +619,7 @@ exp <- data.frame(
 
 # reorder and set the disease status for limma
 exp <- exp[, donors]
-design <- model.matrix(~rev(status))
+design <- model.matrix(~status)
 
 # sample level ad vs ctrl
 spat_lm <- as.data.table(
@@ -616,9 +627,12 @@ spat_lm <- as.data.table(
   keep.rownames = "feats"
 ) 
 
-# merge
+# merge with aggregate spatial scores
 spat_lm <- merge(spat_lm, agg, by.x = 'feats', by.y = 'Name')
 setorder(spat_lm, adj.P.Val, P.Value)
+# fwrite(spat_feats, file = "SEAAD_MTG_MERFISH.2024-12-11.spat_feats_agg.txt.gz")
+# spat_feats <- fread("SEAAD_MTG_MERFISH.2024-12-11.spat_feats_agg.txt.gz")
+
 spat_lm
 
 # plot the top score changes between groups
@@ -642,26 +656,43 @@ p_list <- lapply(names(gobjs), function(i) {
 wrap_plots(p_list) + gt::gt(de[Symbol == top][order(p_val_adj)]) + plot_layout(nrow = 2, guides = 'collect')
 
 ```
+So notably, spatial genes can change in two ways:
+1. The amount of "spatialness" of the gene
+2. The level of expression within the spatial region
 
+Similar to bulkRNAseq data, you can also create [co-expression modules](https://drieslab.github.io/Giotto_website/articles/spatial_coexpression_modules.html) of correlated spatial genes so see which have similar patterns, and develop metagenes analagous to eigengenes for each module. In cases like an organized brain though, these are likely to overlap with your existing cluster annotations. Lastly, you can use these spatial genes with a hidden markov random field (HMRF) model to segment cell clusters by [spatial domain](https://drieslab.github.io/Giotto_website/articles/hmrf.html) instead of traditional Leiden clustering.
+
+Strictly speaking, there is a third spatial gene alteration to consider, which is that the spatial shape or size might change in a way that doesn't alter it's spatial rank, but that would be a much rarer and more challenging thing to identify without visual inspection...
 
 
 ## Cell proximity
-```{r, spat_prox}
+So, on to the next plane of spatial information. Since we have cell types, we can define fairly easily which cells are next to one another. Are L2/3 IT neurons next to L4 IT neurons? Certainly a fair few are.
+
+But what about the more mobile cell types like glia? Does that change with your condition?
+```{r, spat_prox, fig.height=15}
 cell_prox <- lapply(gobjs, cellProximityEnrichment, 
   cluster_column = "Subclass",
   adjust_method = "fdr"
 )
+# saveRDS(cell_prox, file = "SEAAD_MTG_MERFISH.2024-12-11.cell_prox_raw.rds")
+# cell_prox <- readRDS("SEAAD_MTG_MERFISH.2024-12-11.cell_prox_raw.rds")
 
 # barplot
-p_list <- lapply(names(gobjs), function(i) {
+p_list <- lapply(c(1, length(gobjs)), function(i) {
   cellProximityBarplot(gobjs[[i]],
-    CPscore = cell_prox[[i]],
-    save_plot = FALSE,
-    return_plot = TRUE
-  )
+    CPscore = cell_prox[[i]]
+  ) 
 })
+wrap_plots(p_list) + plot_layout(guides = 'collect') + plot_annotation(tag_levels = list(levels(status)))
+
+prox_tab <- lapply(cell_prox, function(i) i[[2]])
+prox_tab <- rbindlist(prox_tab, idcol = g_col)
+
 
 ```
+In this case, the same spatial network is used, but you are calculating the number of cell-cell pairings observed versus expected with permutations of random re-shuffling of the cell type labels.
+
+
 
 ## Interaction changed features
 ```{r, spat_icf}

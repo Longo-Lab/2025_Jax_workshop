@@ -164,6 +164,16 @@ remove(sc_list)
 gc()
 sc <- JoinLayers(sc)
 
+# Add a Group column
+Idents(sc) <- "Donor.ID"
+sc[["Group"]] <- as.character(
+  plyr::mapvalues(
+    x = sc@active.ident,
+    from = donors,
+    to = c(rep('ctrl', 6), rep('ad', 6))
+  )
+)
+
 # Save output
 saveRDS(sc, file = paste("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds", sep = "."))
 remove(sc)
@@ -272,6 +282,15 @@ gobj <- joinGiottoObjects(
 
 # drop extra levels of each factor
 gobj@cell_metadata$cell$rna$`Donor ID` <- factor(gobj@cell_metadata$cell$rna$`Donor ID`)
+
+# Add a Group column
+meta <- pDataDT(gobj)[, .(cell_ID, `Donor ID`)]
+meta <- merge(
+  x = meta,
+  y = data.table("Donor ID" = donors, Group = c(rep('ctrl', 6), rep('ad', 6))),
+  sort = FALSE
+)
+gobj <- addCellMetadata(gobj, new_metadata = meta[, .(cell_ID, Group)])
 
 # plot to see
 spatPlot(gobj,

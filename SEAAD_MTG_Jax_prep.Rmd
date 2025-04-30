@@ -79,8 +79,8 @@ View(meta[, ..view_cols])
 donors <- meta[
   (
     `Overall AD neuropathological Change` %in% c("Not AD", "Low") 
-    & `Continuous Pseudo-progression Score` < 0.35
-    & `Highest Lewy Body Disease` != "Neocortical (Diffuse)"
+    & `Continuous Pseudo-progression Score` < 0.3
+    # & `Highest Lewy Body Disease` != "Neocortical (Diffuse)"
   )
   | (
     `Overall AD neuropathological Change` %in% c("Intermediate", "High") 
@@ -88,7 +88,7 @@ donors <- meta[
   ),
 ][order(get(view_cols[4])), `Donor ID`]
 
-spat_donors <- donors[c(3, 6, 5, 10:12)]
+spat_donors <- donors[c(1:2, 4, 8, 11:12)]
 
 ```
 
@@ -200,7 +200,7 @@ sc <- read_h5ad("SEAAD_MTG_MERFISH.2024-12-11.h5ad")
 # c <- data.table(sc$obsm[['spatial']][sc$obs[["Donor ID"]] == i,])
 
 # choose one section per sample
-set.seed(456)
+set.seed(1234)
 sects <- unique(
   data.table(
     sc$obs[
@@ -247,6 +247,7 @@ gobjs <- lapply(spat_donors, function(i) {
     instructions = instrs
   )
 })
+# lapply(gobjs, function(i) spatPlot(i, cell_color = "Subclass", show_plot = TRUE))
 
 # cleanup anndata (may need to restart R session if lagging too badly)
 remove(sc)
@@ -256,7 +257,7 @@ saveRDS(gobjs, file = "temp_gobjs.rds")
 
 # rotate each to the same orientation
 # spatPlot(spin(gobjs[[6]], 0), cell_color = "Subclass", show_plot = TRUE)
-spins <- c(-85, -71, -13, -44, 6, 94) 
+spins <- c(-76, 137, -85, 39, 6, 41) 
 gobjs <- lapply(seq(gobjs), function(i) {
   spin(gobjs[[i]], angle = spins[i])
 })
@@ -273,7 +274,7 @@ gobj <- joinGiottoObjects(
   gobjs,
   gobject_names = spat_donors,
   join_method = "shift",
-  x_shift = c(0, 3700, 5900, 9200, 11700, 14800),
+  x_shift = c(0, 2900, 5900, 9600, 11900, 15600),
   y_shift = NULL,
   x_padding = NULL,
   y_padding = NULL,
@@ -287,10 +288,17 @@ gobj@cell_metadata$cell$rna$`Donor ID` <- factor(gobj@cell_metadata$cell$rna$`Do
 meta <- pDataDT(gobj)[, .(cell_ID, `Donor ID`)]
 meta <- merge(
   x = meta,
-  y = data.table("Donor ID" = donors, Group = c(rep('ctrl', 6), rep('ad', 6))),
+  y = data.table(
+    "Donor ID" = spat_donors, 
+    Group = factor(c(rep('ctrl', 3), rep('ad', 3)), levels = c('ctrl', 'ad'))
+  ),
   sort = FALSE
 )
-gobj <- addCellMetadata(gobj, new_metadata = meta[, .(cell_ID, Group)])
+gobj <- addCellMetadata(gobj, 
+  new_metadata = meta[, .(cell_ID, Group)],
+  by_column = TRUE,
+  column_cell_ID = 'cell_ID'
+)
 
 # plot to see
 spatPlot(gobj,

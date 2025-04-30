@@ -60,7 +60,7 @@ resi <- 0.8
 ```
 
 ## Clean and Analyze
-The bulk of the processing can be done in rapid succession, with linking `%>%` chains.
+The bulk of the processing can be done in rapid succession, with linking `%>%` chains (in R >4.4, they are now using `|>` pipes instead, but we'll leave it for backward compatibility)
 ```{r, sc_process, message = FALSE, warning = FALSE}
 if (integ) {
   # split by group column
@@ -70,7 +70,7 @@ if (integ) {
   sc %>%
     NormalizeData() %>%
     FindVariableFeatures() %>%
-    ScaleData(vars.to.regress = c("Donor.ID")) %>%
+    ScaleData(vars.to.regress = c("Donor.ID", "Sex", "Age.at.Death")) %>%
     RunPCA(npcs = pcs) %>%
     RunUMAP(dims = 1:pcs, reduction.name = "umap") %>%
 
@@ -108,7 +108,10 @@ if (integ) {
 
 ```
 
-How did that integration turn out? We can visualize with the two UMAPs if we did integration, or just plotting the standard UMAP if we did not.
+How did that integration turn out? We can visualize with the two UMAPs if we did integration, or just plotting the standard UMAP if we did not. 
+
+Why did we split and integrate our experimental groups?
+
 ```{r, integ_plot}
 if (integ) {
   p1 <- DimPlot(sc, reduction = "umap", group.by = "Donor.ID", shuffle = TRUE)
@@ -156,7 +159,7 @@ For now, we are going for speed, running the standard Wilcoxon Rank Sum test (sp
 # which column contains cell types?
 ctype <- 'Subclass'
 # which column contains experimental groups?
-group <- 'Cognitive.Status'
+group <- g_col
 
 # standard DE analysis --------------------------------------------------------
 Idents(sc) <- ctype
@@ -164,8 +167,8 @@ Idents(sc) <- ctype
 de <- lapply(levels(sc), function(i) {
   data.table(
     FindMarkers(sc,
-      ident.1 = 'Dementia',
-      ident.2 = 'No dementia',
+      ident.1 = 'ad',
+      ident.2 = 'ctrl',
       group.by = group,
       subset.ident = i,
       # test.use = "MAST", # more stringent test, also allows the use of latent.vars
@@ -221,8 +224,8 @@ The [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-a
 # de <- lapply(levels(pseudo), function(i) {
 #   data.table(
 #     FindMarkers(pseudo,
-#       ident.1 = 'Dementia',
-#       ident.2 = 'No dementia',
+#       ident.1 = 'ad',
+#       ident.2 = 'ctrl',
 #       group.by = group,
 #       subset.ident = i,
 #       latent.vars = c("Sex", "Age.at.Death"),
@@ -319,9 +322,6 @@ gc()
 integ <- TRUE
 # what column name contains the groups you are integrating?
 g_col <- 'Donor ID' 
-# donors <- c("H21.33.015", "H21.33.028", "H21.33.023", "H21.33.014", "H21.33.031", "H20.33.015")
-donors <- c("H20.33.035", "H21.33.023", "H20.33.012", "H20.33.040", "H20.33.004", "H21.33.031")
-status <- factor(c(rep("ctrl", 3), rep("ad", 3)), levels = c('ctrl', 'ad'))
 # how many principal components do you wish to use?
 pcs <- 8
 # what clustering resolution? 
@@ -350,7 +350,15 @@ instructions(gobj,
   param = c("save_dir", "save_plot", "return_plot")
 ) <- list(getwd(), FALSE, TRUE)
 
+# finally, we are going to pull out some sample metadata for later
+meta <- pDataDT(gobj)
+meta <- unique(meta[, .(`Donor ID`, Group, Sex, `Age at Death`)])
+meta[`Donor ID` == "H21.33.015", `Age at Death` := "98"]
+meta$`Age at Death` <- as.integer(as.character(meta$`Age at Death`))
+meta
+
 ```
+
 Another potential benefit is that certain spatial technologies allow exact RNA positioning, and immunostained images to be underlayed behind your cell labels, for very cool images at real sub-cellular resolution!
 ```{r, test_picture}
 g <- GiottoData::loadGiottoMini("cosmx", verbose = FALSE)
@@ -365,9 +373,12 @@ spatInSituPlotPoints(g,
 
 
 ```
-Sadly, our MERFISH data will limit rna counts to the cell level, where each point is a cell with ~ 180 gene expression values.
 
-Rather than use all 12 donors for this example, we have the three most normal and three highest `Overall AD neuropathological change`. To get these from the overall dataset takes some work, but for now lets examine how they look in space. Prompt: Do you see any notable spatial features?  
+Sadly, our MERFISH data will limit RNA counts to the cell level, where each point is a cell with ~ 180 gene expression values.
+
+Rather than use all 12 donors for this example, we have the three matched `ad` and `ctrl` samples (as best as we can) with strong differential pseudo-progression scores and `Overall Neuropathological Change`. To get these from the overall dataset takes some work, but for now lets examine how they look in space. 
+
+Prompt: Do you see any notable spatial features?  
 ```{r, init_spatplot}
 p <- spatPlot(gobj, 
   cell_color = "Subclass",
@@ -378,6 +389,7 @@ p + labs(subtitle = paste(donors, collapse = "       ")) +
   theme(legend.position = 'bottom', plot.subtitle = element_text(hjust = 0.5))
 
 ```
+
 Each of these blocks represents a section through the cortex, from L1 --> white matter at the bottom.
 Layers of neurons tend to be easily recognized transcriptomically, and this has been the case across multiple datasets (Yao 2021, Yao 2024, Lots more can be included). This actually extends to brain regions as well, as the Allen Institute's recent series of papers (Yao 2024, Merscope paper 2024). This can make it sort of easy to compare Layers between single-cell RNAseq and spatial RNAseq, though there is no replacement for the actual spatial information.
 
@@ -388,7 +400,7 @@ Bonus: How would I identify the `Donor ID` if I was trying to look at it?
 Thinking back to the single-cell data, there were a series of steps:
 
 1. Clean the data (not included) - see tools like SoupX, DoubletFinder, etc
-2. ~~(Optional) Integrate datasets, if multiple~~
+2. Integrate datasets, if multiple
 3. Normalize & Scale
 4. Calculate Principal Components
 5. Find Neighbors
@@ -397,7 +409,9 @@ Thinking back to the single-cell data, there were a series of steps:
 
 Do those still apply for spatial data? 
 
-For the most part, excepting that we are analyzing the ad and ctrl data separately, so there is no integration step. We also can actually use spatial information in our Neighbors/Clusters step to make our clustering more constrained to spatial zones.
+For the most part, excepting that we are integrating using `g_col`, which if you notice has changed to `"Donor ID"`. We'll cover why in a bit, but here's a big clue. We also can actually use spatial information in our Neighbors/Clusters step to make our clustering more constrained to spatial zones. 
+
+You may also notice that we are no longer regressing out donor level stats like `Age at Death` since samples are being integrated at the donor level for this step. Downstream analyses will examine each slice separately, and include these covariates in differential meta-analysis. Should you want to try and merge samples for a more complex analysis, you can adjust for additional covariates/batches using `adjustGiottoMatrix`.  
 
 
 ## Clean and prep
@@ -416,6 +430,8 @@ gobj %>%
 ```
 
 Now that our normalized data is ready, lets make some clusters in the spatial style. A notable difference with other platforms like CosMx/Xenium/scRNAseq is that there are few total genes. So automated selection of variable genes for principal components doesn't work. We can specify a theshold using `calculateHVF`. We also need to integrate our **all** of our sample slides using Harmony.
+
+Why integrate all samples instead of just some 
 ```{r, spat_cluster}
 gobj %>% 
   runPCA() %>%
@@ -608,7 +624,7 @@ wrap_plots(p_list) + gt::gt(de[Symbol == top][order(p_val_adj)]) + plot_layout(n
 ```
 So the top gene is pretty highly expressed in the L2/3 layer, regardless of disease status. Even more apparent when you pop it out in a new viewer window. In fact, it appears most spatial genes have similar agg ranks in either case, which you might expect from a very layered tissue like the cortex.
 
-Now let's look at the top changing genes across the two conditions. We can use a standard DE package that can handle log transformed values like `limma`.
+Now let's look at the top changing genes across the two conditions. We can use a common DE package that can handle log transformed values like `limma`.
 ```{r, spat_feats_de}
 # to test differences in average expression in high cells, use limma's lmFit ---
 # make a table of the av_expr for each Donor
@@ -619,7 +635,7 @@ exp <- data.frame(
 
 # reorder and set the disease status for limma
 exp <- exp[, donors]
-design <- model.matrix(~status)
+design <- model.matrix(~status + sex + age)
 
 # sample level ad vs ctrl
 spat_lm <- as.data.table(
@@ -660,7 +676,7 @@ So notably, spatial genes can change in two ways:
 1. The amount of "spatialness" of the gene
 2. The level of expression within the spatial region
 
-Similar to bulkRNAseq data, you can also create [co-expression modules](https://drieslab.github.io/Giotto_website/articles/spatial_coexpression_modules.html) of correlated spatial genes so see which have similar patterns, and develop metagenes analagous to eigengenes for each module. In cases like an organized brain though, these are likely to overlap with your existing cluster annotations. Lastly, you can use these spatial genes with a hidden markov random field (HMRF) model to segment cell clusters by [spatial domain](https://drieslab.github.io/Giotto_website/articles/hmrf.html) instead of traditional Leiden clustering.
+Similar to bulkRNAseq data, you can also create [co-expression modules](https://drieslab.github.io/Giotto_website/articles/spatial_coexpression_modules.html) of correlated spatial genes so see which have similar patterns, and develop metagenes analogous to eigengenes for each module. In cases like an organized brain though, these are likely to overlap with your existing cluster annotations. Lastly, you can use these spatial genes with a hidden markov random field (HMRF) model to segment cell clusters by [spatial domain](https://drieslab.github.io/Giotto_website/articles/hmrf.html) instead of traditional Leiden clustering.
 
 Strictly speaking, there is a third spatial gene alteration to consider, which is that the spatial shape or size might change in a way that doesn't alter it's spatial rank, but that would be a much rarer and more challenging thing to identify without visual inspection...
 
@@ -690,7 +706,12 @@ prox_tab <- rbindlist(prox_tab, idcol = g_col)
 
 
 ```
-In this case, the same spatial network is used, but you are calculating the number of cell-cell pairings observed versus expected with permutations of random re-shuffling of the cell type labels.
+In this case, the same spatial network is used, but you are calculating the number of cell-cell pairings observed versus expected with permutations of random re-shuffling of the cell type labels on your spatial network.
+
+Key values in this analysis are the `unified_int`, `enrichm`, `PI_value`:
+- `score`: `estimate * -log(p.value)`, the measure of the "spatialness of the gene"
+- `av_expr`: the average expression high-expressing genes
+- `high_expr`: the total number of high expressing genes
 
 
 

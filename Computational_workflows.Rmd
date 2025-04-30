@@ -51,7 +51,7 @@ sc <- readRDS("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
 # do you have multiple conditions to integrate?
 integ <- TRUE
 # what column name contains the groups you are integrating?
-g_col <- 'Cognitive.Status' 
+g_col <- 'Group' 
 # how many principal components do you wish to use?
 pcs <- 30
 # what clustering resolution? 

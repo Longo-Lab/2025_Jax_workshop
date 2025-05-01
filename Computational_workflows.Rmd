@@ -10,6 +10,12 @@ output:
     fig_align: center
 ---
 
+# Introductory concepts (lecture)
+Hello and welcome to the course! 
+
+We are going to cover a lot of material on analysis of transcripts of individual cells.
+
+First, lets load up some packages to get us going...
 ```{r, load_up, include = FALSE}
 # knitr options
 knitr::opts_chunk$set(
@@ -27,9 +33,10 @@ library(RobustRankAggreg)
 library(limma)
 # library(liana)
 
-```
-# Introductory concepts (lecture)
+# we will be working out of the data folder
+# setwd("/sbgenomics/projects/asliuyar/asliuyar/ad-omics/data/2_sc_spatial_Butler")
 
+```
 
 # Single-cell analysis (interactive)
 To begin, this course assumes you have a basic familiarity with single-cell analysis using the [Seurat](https://satijalab.org/seurat/) package. We won't cover in huge detail the major steps in a single-cell analysis, but leave it for you to explore. Our key steps:
@@ -188,18 +195,18 @@ de[p_val_adj < 0.05, .N, by = Subclass]
 
 # # Let's save it
 # fwrite(de, file = "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
-# de <- fread("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
+de <- fread("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
 
 ```
 
 However, when doing differential expression it is important to consider that testing thousands of cells can inflate estimates of significance. Do you have a highly significant change with an `avg_log2FC` of 0.10 in less than 10% of your cell type (`pct.1` and `pct.2`). That may not reflect biologically relevant variability. In general you can limit this with certain options like limiting `max.cells.per.ident` for your comparisons. 
 
-The [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-analysis-after-pseudobulking) method is to construct pseudo-bulk datasets for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. In our case even with n == 6 per group there are only two DE genes in any cells...
+The [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-analysis-after-pseudobulking) method is to construct pseudo-bulk datasets for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. In our case even with n == 6 per group there are only a few DE genes in any cells...
 ```{r, sc_de_pseudo}
 # # using pseudobulk analysis to control for within-sample correlation -----------
-# pseudo <- AggregateExpression(sc, 
+# pseudo <- AggregateExpression(sc,
 #   assays = "RNA",
-#   return.seurat = TRUE, 
+#   return.seurat = TRUE,
 #   group.by = c("Donor.ID", group, ctype)
 # )
 # pseudo@assays$RNA$counts <- round(pseudo@assays$RNA$counts)
@@ -220,7 +227,7 @@ The [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-a
 # )
 # 
 # Idents(pseudo) <- ctype
-# # running in a lapply loop to test each cell type (future.lapply can be even faster) 
+# # running in a lapply loop to test each cell type (future.lapply can be even faster)
 # de <- lapply(levels(pseudo), function(i) {
 #   data.table(
 #     FindMarkers(pseudo,
@@ -234,7 +241,7 @@ The [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-a
 #     keep.rownames = TRUE
 #   )
 # })
-# # Using data.table allows us to quickly/safely combine our de results into one table 
+# # Using data.table allows us to quickly/safely combine our de results into one table
 # setattr(de, 'names', levels(pseudo))
 # de <- rbindlist(de, idcol = ctype)
 # setnames(de, "rn", "Symbol")
@@ -313,7 +320,7 @@ Part of the reason we chose the SEA-AD dataset as a reference, is because we can
 As with before, there are some global settings to include, and lets load things into memory.
 ```{r, init_giotto}
 # lets save some space in memory
-remove(sc)
+remove(sc, pseudo)
 gc()
 
 
@@ -353,6 +360,7 @@ instructions(gobj,
 # finally, we are going to pull out some sample metadata for later
 meta <- pDataDT(gobj)
 meta <- unique(meta[, .(`Donor ID`, Group, Sex, `Age at Death`)])
+meta$`Donor ID` <- factor(meta$`Donor ID`, levels = meta$`Donor ID`)
 meta[`Donor ID` == "H21.33.015", `Age at Death` := "98"]
 meta$`Age at Death` <- as.integer(as.character(meta$`Age at Death`))
 meta
@@ -385,7 +393,7 @@ p <- spatPlot(gobj,
   point_size = 1,
   cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet"))
 )
-p + labs(subtitle = paste(donors, collapse = "       ")) + 
+p + labs(subtitle = paste(meta$`Donor ID`, collapse = "       ")) + 
   theme(legend.position = 'bottom', plot.subtitle = element_text(hjust = 0.5))
 
 ```
@@ -494,18 +502,18 @@ p <- spatPlot(gobj,
   point_size = 1,
   cell_color_code = as.vector(palette.colors(n = 24, palette = "Alphabet"))
 )
-p + labs(subtitle = paste(donors, collapse = "       ")) + 
+p + labs(subtitle = paste(meta$`Donor ID`, collapse = "       ")) + 
   theme(legend.position = 'bottom', plot.subtitle = element_text(hjust = 0.5))
 
 ```
-Notably the `beige` and `copper` colored clusters that are L2/3 IT neurons are in the correct layer. The light gray set that is L4 IT neurons are a little harder to see in the picture, but are in the middle.
+Notably the `purple`, `beige` and `red` colored clusters that are L2/3 IT neurons are in the correct layer. The `hot pink` set that is L4 IT neurons are a little harder to see in the picture, but are in the middle.
 
 From this point on, we can also save the Giotto objects, as we won't be modifying it anymore, just analyzing it.
 ```{r, save_giotto}
 saveGiotto(gobj,
   foldername = "SEAAD_MTG_MERFISH.2024-12-11.giotto_obj",
   method = 'qs',
-  overwrite = TRUE
+  overwrite = FALSE
 )
 
 ```
@@ -574,6 +582,7 @@ spat_feats <- spat_feats[!feats %like% "Blank"]
 
 spat_feats
 ```
+
 Key values in this analysis are the `score`, `av_expr`, `high_expr`:
 - `score`: `estimate * -log(p.value)`, the measure of the "spatialness of the gene"
 - `av_expr`: the average expression high-expressing genes
@@ -585,12 +594,12 @@ So a simple solution is to simply look at the top ranked spatial genes, these ge
 # first, lets calculate the rank aggregate spatial score for each `status`
 agg <- merge(
   x = aggregateRanks(
-    lapply(donors[status == 'ad'], function(i) {
+    lapply(meta[Group == 'ad', `Donor ID`], function(i) {
       spat_feats[order(-score)][`Donor ID` == i, feats]
     })
   ),
   y = aggregateRanks(
-    lapply(donors[status == 'ctrl'], function(i) {
+    lapply(meta[Group == 'ctrl', `Donor ID`], function(i) {
       spat_feats[order(-score)][`Donor ID` == i, feats]
     })
   ),
@@ -634,8 +643,8 @@ exp <- data.frame(
 )
 
 # reorder and set the disease status for limma
-exp <- exp[, donors]
-design <- model.matrix(~status + sex + age)
+exp <- exp[, levels(meta$`Donor ID`)]
+design <- model.matrix(~ Group + Sex + `Age at Death`, data = meta)
 
 # sample level ad vs ctrl
 spat_lm <- as.data.table(
@@ -652,7 +661,7 @@ setorder(spat_lm, adj.P.Val, P.Value)
 spat_lm
 
 # plot the top score changes between groups
-top <- spat_lm[3, feats]
+top <- "TACR1"
 p_list <- lapply(names(gobjs), function(i) {
   p <- spatFeatPlot2D(gobjs[[i]],
     expression_values = "scaled", 
@@ -699,69 +708,71 @@ p_list <- lapply(c(1, length(gobjs)), function(i) {
     CPscore = cell_prox[[i]]
   ) 
 })
-wrap_plots(p_list) + plot_layout(guides = 'collect') + plot_annotation(tag_levels = list(levels(status)))
+wrap_plots(p_list) + plot_layout(guides = 'collect') + plot_annotation(tag_levels = list(levels(meta$Group)))
 
 prox_tab <- lapply(cell_prox, function(i) i[[2]])
 prox_tab <- rbindlist(prox_tab, idcol = g_col)
 
+prox_tab
 
 ```
 In this case, the same spatial network is used, but you are calculating the number of cell-cell pairings observed versus expected with permutations of random re-shuffling of the cell type labels on your spatial network.
 
 Key values in this analysis are the `unified_int`, `enrichm`, `PI_value`:
-- `score`: `estimate * -log(p.value)`, the measure of the "spatialness of the gene"
-- `av_expr`: the average expression high-expressing genes
-- `high_expr`: the total number of high expressing genes
+- `unified_int`: Interacting pair, either `hetro` or `homo`
+- `enrichm`: `log2((original + 1) / (simulations + 1))` enrichment ratio, i.e. observed over the expected frequency of cell-cell proximity interactions
+- `PI_value`: ranking score, basically `-log10(p.adj + 1/n_perm) * enrichm` 
 
 
 
 ## Interaction changed features
 ```{r, spat_icf}
 
-## select top 25th highest expressing genes
-gene_metadata <- fDataDT(SS_seqfish)
+# ## select top 25th highest expressing genes
+# gene_metadata <- fDataDT(SS_seqfish)
+# 
+# plot(gene_metadata$nr_cells, gene_metadata$mean_expr)
+# 
+# plot(gene_metadata$nr_cells, gene_metadata$mean_expr_det)
+# 
+# quantile(gene_metadata$mean_expr_det)
+# 
+# high_expressed_genes <- gene_metadata[mean_expr_det > 3.5]$feat_ID
+# 
+# ## identify genes that are associated with proximity to other cell types
+# plan("multisession", workers = 6)
+# 
+# ICFsForesHighGenes <- findInteractionChangedFeats(
+#     gobject = SS_seqfish,
+#     selected_feats = high_expressed_genes,
+#     spatial_network_name = "Delaunay_network",
+#     cluster_column = "cell_types"
+#     diff_test = "permutation",
+#     adjust_method = "fdr",
+#     nr_permutations = 2000,
+#     do_parallel = TRUE
+# )
+# 
+# ## visualize all genes
+# plotCellProximityFeats(SS_seqfish,
+#                        icfObject = ICFsForesHighGenes,
+#                        method = "dotplot")
+# 
+# ## filter genes
+# ICFscoresFilt <- filterICF(ICFsForesHighGenes)
+# 
+# ## visualize subset of interaction changed genes (ICFs)
+# ICF_genes <- c("Jakmip1", "Golgb1", "Dact2", "Ddx27", "Abl1", "Zswim8")
+# ICF_genes_types <- c("Lhx6 iNeuron", "Lhx6 iNeuron", "L4 eNeuron", "L4 eNeuron", "astrocytes", "astrocytes")
+# names(ICF_genes) <- ICF_genes_types
+# 
+# plotICF(gobject = SS_seqfish,
+#         icfObject = ICFsForesHighGenes,
+#         source_type = "endothelial",
+#         source_markers = c("Pltp", "Cldn5", "Apcdd1"),
+#         ICF_feats = ICF_genes
+# )
 
-plot(gene_metadata$nr_cells, gene_metadata$mean_expr)
-
-plot(gene_metadata$nr_cells, gene_metadata$mean_expr_det)
-
-quantile(gene_metadata$mean_expr_det)
-
-high_expressed_genes <- gene_metadata[mean_expr_det > 3.5]$feat_ID
-
-## identify genes that are associated with proximity to other cell types
-plan("multisession", workers = 6)
-
-ICFsForesHighGenes <- findInteractionChangedFeats(
-    gobject = SS_seqfish,
-    selected_feats = high_expressed_genes,
-    spatial_network_name = "Delaunay_network",
-    cluster_column = "cell_types"
-    diff_test = "permutation",
-    adjust_method = "fdr",
-    nr_permutations = 2000,
-    do_parallel = TRUE
-)
-
-## visualize all genes
-plotCellProximityFeats(SS_seqfish,
-                       icfObject = ICFsForesHighGenes,
-                       method = "dotplot")
-
-## filter genes
-ICFscoresFilt <- filterICF(ICFsForesHighGenes)
-
-## visualize subset of interaction changed genes (ICFs)
-ICF_genes <- c("Jakmip1", "Golgb1", "Dact2", "Ddx27", "Abl1", "Zswim8")
-ICF_genes_types <- c("Lhx6 iNeuron", "Lhx6 iNeuron", "L4 eNeuron", "L4 eNeuron", "astrocytes", "astrocytes")
-names(ICF_genes) <- ICF_genes_types
-
-plotICF(gobject = SS_seqfish,
-        icfObject = ICFsForesHighGenes,
-        source_type = "endothelial",
-        source_markers = c("Pltp", "Cldn5", "Apcdd1"),
-        ICF_feats = ICF_genes
-)
 ```
 
 # Single-cell x Spatial analysis (interactive)

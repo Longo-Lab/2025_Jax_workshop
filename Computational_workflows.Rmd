@@ -13,7 +13,11 @@ output:
 # Introductory concepts (lecture)
 Hello and welcome to the course! 
 
-We are going to cover a lot of material on analysis of transcripts of individual cells.
+We are going to cover a lot of material on analysis of transcripts of individual cells in two formats, single-cell/nucleus and spatial transcriptomics. The concepts are hopefully generalizable to more types of data, depending on their format. In particular the Giotto object for spatial transcriptomics is already constructed for multiple types of spatial molecules beyond RNA.
+
+This course assumes you have a working knowledge of R, but will remove the more complex aspects of deploying these analyses at scale (multithreading, gpus, batch scheduling, etc). For the most part we will rely on two R concepts to work efficiently: piping steps together with `%>%` and running functions on lists using `lapply`. Additionally, it makes use of the `data.table` object which is a much faster implementation of a data.frame with built in data processing features. 
+
+Also note that many of the concepts here have analgous implementations in python in formats such as [Scanpy](https://scanpy.readthedocs.io/) and [Squidpy](https://squidpy.readthedocs.io/). 
 
 First, lets load up some packages to get us going...
 ```{r, load_up, include = FALSE}
@@ -34,7 +38,8 @@ library(limma)
 # library(liana)
 
 # we will be working out of the data folder
-# setwd("/sbgenomics/projects/asliuyar/asliuyar/ad-omics/data/2_sc_spatial_Butler")
+# data_path <- ("/sbgenomics/projects/asliuyar/asliuyar/ad-omics/data/2_sc_spatial_Butler")
+data_path <- getwd()
 
 ```
 
@@ -52,8 +57,7 @@ To begin, this course assumes you have a basic familiarity with single-cell anal
 ## Prep the (cleaned) data
 This will define standard settings you intend to run for the analysis
 ```{r, get_sc_data}
-sc <- readRDS("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
-# sc <- pbmc_small
+sc <- readRDS(file.path(data_path, "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds"))
 
 # do you have multiple conditions to integrate?
 integ <- TRUE
@@ -111,7 +115,9 @@ if (integ) {
 
 # # Save progress
 # saveRDS(sc, file = "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
-# sc <- readRDS("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
+# sc <- readRDS(
+#   file.path(data_path, "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
+# )
 
 ```
 
@@ -195,7 +201,9 @@ de[p_val_adj < 0.05, .N, by = Subclass]
 
 # # Let's save it
 # fwrite(de, file = "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
-de <- fread("SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
+de <- fread(
+  file.path(data_path, "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.ad_vs_ctrl.txt.gz")
+)
 
 ```
 
@@ -309,7 +317,7 @@ Spatial data of either type can be evaluated in four conceptual frameworks (so f
 3. Interaction changed features - in those cells, does gene expression change based on proximity?
 4. Ligand-receptor interaction - proximity expression, but tested for ligand-receptor pairs in source-target cell types.
 
-More types of analysis are still developing, and the space can be described as 
+More types of analysis are still developing, and the space can be described as...active. In particular one of the more challenging issues to address is how to analyze multiple samples and differential analysis across experimental groups. Most current analysis covers differences across regions within a single tissue sample. We will explore one particular methodology and talk briefly about the potential for novel approaches.
 
 
 # Spatial analysis (interactive)
@@ -337,7 +345,9 @@ resi <- 0.4
 
 # lets load in our giotto datasets
 set_giotto_python_path()
-gobj <- loadGiotto("SEAAD_MTG_MERFISH.2024-12-11.giotto_obj")
+gobj <- loadGiotto(
+  file.path(data_path, "SEAAD_MTG_MERFISH.2024-12-11.giotto_obj")
+)
 
 ```
 
@@ -415,7 +425,7 @@ Thinking back to the single-cell data, there were a series of steps:
 6. Find Clusters
 7. Run UMAP
 
-Do those still apply for spatial data? 
+> .callout_info Do those still apply for spatial data? 
 
 For the most part, excepting that we are integrating using `g_col`, which if you notice has changed to `"Donor ID"`. We'll cover why in a bit, but here's a big clue. We also can actually use spatial information in our Neighbors/Clusters step to make our clustering more constrained to spatial zones. 
 
@@ -510,11 +520,11 @@ Notably the `purple`, `beige` and `red` colored clusters that are L2/3 IT neuron
 
 From this point on, we can also save the Giotto objects, as we won't be modifying it anymore, just analyzing it.
 ```{r, save_giotto}
-saveGiotto(gobj,
-  foldername = "SEAAD_MTG_MERFISH.2024-12-11.giotto_obj",
-  method = 'qs',
-  overwrite = FALSE
-)
+# saveGiotto(gobj,
+#   foldername = "SEAAD_MTG_MERFISH.2024-12-11.giotto_obj",
+#   method = 'qs',
+#   overwrite = FALSE
+# )
 
 ```
 
@@ -550,6 +560,7 @@ gobjs <- splitGiotto(gobj, by = g_col)
 
 # We have to create a spatial network for each slide based on physical distance of cell centroids
 gobjs <- lapply(gobjs, createSpatialNetwork)
+gobjs <- lapply(gobjs, createSpatialGrid, sdimx_stepsize = 500, sdimy_stepsize = 500, minimum_padding = 50)
 
 # example of a spatial networks (small window)
 smallfov <- subsetGiottoLocs(gobjs[[1]],
@@ -569,7 +580,9 @@ spatPlot(smallfov,
 
 ```
 
-If you don't have multiple images per group, you can rely on the default output for the single image, you will simply not have the extra layer of statistical confidence on between group differences.
+> .callout_info Multiple samples per group
+>
+> If you don't have multiple images per group, you can rely on the default output for the single image, you will simply not have the extra layer of statistical confidence on between group differences.
 
 Now we can find spatially organized gene expression by examining the binarized expression of cells and their spatial neighbors. The full description is [here](https://drieslab.github.io/Giotto_website/reference/binSpect.html) 
 ```{r, spat_genes}
@@ -578,12 +591,15 @@ spat_feats <- lapply(gobjs, binSpect)
 spat_feats <- rbindlist(spat_feats, idcol = g_col)
 spat_feats <- spat_feats[!feats %like% "Blank"]
 # fwrite(spat_feats, file = "SEAAD_MTG_MERFISH.2024-12-11.spat_feats_raw.txt.gz")
-# spat_feats <- fread("SEAAD_MTG_MERFISH.2024-12-11.spat_feats_raw.txt.gz")
+# spat_feats <- fread(
+#   file.path(data_path, "SEAAD_MTG_MERFISH.2024-12-11.spat_feats_raw.txt.gz")
+# )
 
 spat_feats
 ```
 
 Key values in this analysis are the `score`, `av_expr`, `high_expr`:
+
 - `score`: `estimate * -log(p.value)`, the measure of the "spatialness of the gene"
 - `av_expr`: the average expression high-expressing genes
 - `high_expr`: the total number of high expressing genes
@@ -627,7 +643,10 @@ p_list <- lapply(names(gobjs), function(i) {
   ) 
   p + scale_color_distiller(name = "RdBu", limits = c(-3, 3)) + ggtitle(paste(i, top))
 })
-wrap_plots(p_list) + gt::gt(de[Symbol == top][order(p_val_adj)]) + plot_layout(nrow = 2, guides = 'collect')
+wrap_plots(p_list)
+
+# was that gene a de gene?
+de[Symbol == top][order(p_val_adj)] 
 
 
 ```
@@ -648,15 +667,17 @@ design <- model.matrix(~ Group + Sex + `Age at Death`, data = meta)
 
 # sample level ad vs ctrl
 spat_lm <- as.data.table(
-  topTable(eBayes(lmFit(exp, design)), number = nrow(exp)), 
+  topTable(eBayes(lmFit(exp, design)), number = nrow(exp), coef = 2), 
   keep.rownames = "feats"
 ) 
 
 # merge with aggregate spatial scores
 spat_lm <- merge(spat_lm, agg, by.x = 'feats', by.y = 'Name')
 setorder(spat_lm, adj.P.Val, P.Value)
-# fwrite(spat_feats, file = "SEAAD_MTG_MERFISH.2024-12-11.spat_feats_agg.txt.gz")
-# spat_feats <- fread("SEAAD_MTG_MERFISH.2024-12-11.spat_feats_agg.txt.gz")
+fwrite(spat_lm, file = "SEAAD_MTG_MERFISH.2024-12-11.spat_feats_agg.txt.gz")
+# spat_lm <- fread(
+#   file.path(data_path, "SEAAD_MTG_MERFISH.2024-12-11.spat_feats_agg.txt.gz")
+# )
 
 spat_lm
 
@@ -678,10 +699,14 @@ p_list <- lapply(names(gobjs), function(i) {
   )
   p + scale_color_distiller(name = "RdBu", limits = c(-3, 3)) + ggtitle(paste(i, top))
 })
-wrap_plots(p_list) + gt::gt(de[Symbol == top][order(p_val_adj)]) + plot_layout(nrow = 2, guides = 'collect')
+wrap_plots(p_list)
+  
+# How about this one, DE?
+de[Symbol == top][order(p_val_adj, p_val)] 
 
 ```
 So notably, spatial genes can change in two ways:
+
 1. The amount of "spatialness" of the gene
 2. The level of expression within the spatial region
 
@@ -700,7 +725,9 @@ cell_prox <- lapply(gobjs, cellProximityEnrichment,
   adjust_method = "fdr"
 )
 # saveRDS(cell_prox, file = "SEAAD_MTG_MERFISH.2024-12-11.cell_prox_raw.rds")
-# cell_prox <- readRDS("SEAAD_MTG_MERFISH.2024-12-11.cell_prox_raw.rds")
+# cell_prox <- readRDS(
+#   file.path(data_path, "SEAAD_MTG_MERFISH.2024-12-11.cell_prox_raw.rds")
+# )
 
 # barplot
 p_list <- lapply(c(1, length(gobjs)), function(i) {
@@ -708,24 +735,124 @@ p_list <- lapply(c(1, length(gobjs)), function(i) {
     CPscore = cell_prox[[i]]
   ) 
 })
-wrap_plots(p_list) + plot_layout(guides = 'collect') + plot_annotation(tag_levels = list(levels(meta$Group)))
+wrap_plots(p_list) + 
+  plot_layout(guides = 'collect') + 
+  plot_annotation(tag_levels = list(levels(meta$Group)))
 
+```
+In this case, the same spatial network is used, but you are calculating the number of cell-cell pairings observed versus expected with permutations of random re-shuffling of the cell type labels on your spatial network. A given pairing can either be enriched (more likely than expected) or depleted (less). This can be shown as a ranked barplot, a heatmap, or a network diagram.
+
+Note this includes `homo` or same-cell interactions. Do any of the cell types seem to stick together?
+
+We can simplify the results table to understand where the numbers are coming from.
+```{r}
+# lets simplify the results so we can take a closer look
 prox_tab <- lapply(cell_prox, function(i) i[[2]])
 prox_tab <- rbindlist(prox_tab, idcol = g_col)
 
-prox_tab
+prox_tab[order(-PI_value)]
 
 ```
-In this case, the same spatial network is used, but you are calculating the number of cell-cell pairings observed versus expected with permutations of random re-shuffling of the cell type labels on your spatial network.
 
 Key values in this analysis are the `unified_int`, `enrichm`, `PI_value`:
-- `unified_int`: Interacting pair, either `hetro` or `homo`
+
+- `unified_int`: Interacting pair, either type `hetro` or `homo`
 - `enrichm`: `log2((original + 1) / (simulations + 1))` enrichment ratio, i.e. observed over the expected frequency of cell-cell proximity interactions
 - `PI_value`: ranking score, basically `-log10(p.adj + 1/n_perm) * enrichm` 
+
+So similar to before we have an effect size (`enrichm`) and a score (`PI_value`), but unlike with spatial genes we do not have an average expression value to use. Also notice, the `PI_value` has a sign, so strongly depleted values would rank last! In this case an average `PI_value` for each condition would be more informative, and then we can test the actual `enrichm` across groups for differential effect.  
+```{r, prox_int_rank}
+# first, lets calculate the mean PI_value for each group
+agg <- merge(
+  x = prox_tab[
+    `Donor ID` %in% meta[Group == 'ad', `Donor ID`], 
+    .(avg_PI.ad = mean(PI_value)), 
+    by = unified_int
+  ],
+  y = prox_tab[
+    `Donor ID` %in% meta[Group == 'ctrl', `Donor ID`], 
+    .(avg_PI.ctrl = mean(PI_value)), 
+    by = unified_int
+  ]
+)
+
+# now lets check if any interactions showed an average difference
+agg[, dPI.ad.vs.ctrl := avg_PI.ad - avg_PI.ctrl]
+setorder(agg, -dPI.ad.vs.ctrl)
+
+agg
+
+```
+
+Now let's look at the top changing genes across the two conditions. We can use a common DE package that can handle log transformed values like `limma`.
+```{r, prox_feats_de}
+# to test differences in average expression in high cells, use limma's lmFit ---
+# make a table of the av_expr for each Donor
+exp <- data.frame(
+  dcast(prox_tab, unified_int ~ `Donor ID`, value.var = 'PI_value'), 
+  row.names = 'unified_int'
+)
+
+# reorder and set the disease status for limma
+exp <- exp[, levels(meta$`Donor ID`)]
+design <- model.matrix(~ Group + Sex + `Age at Death`, data = meta)
+
+# sample level ad vs ctrl
+prox_lm <- as.data.table(
+  topTable(eBayes(lmFit(exp, design)), number = nrow(exp), coef = 2), 
+  keep.rownames = "unified_int"
+) 
+
+# merge with aggregate spatial scores
+prox_lm <- merge(prox_lm, agg, by = 'unified_int')
+setorder(prox_lm, adj.P.Val, P.Value)
+# fwrite(prox_lm, file = "SEAAD_MTG_MERFISH.2024-12-11.cell_prox_agg.txt.gz")
+# prox_lm <- fread(
+#   file.path(data_path, "SEAAD_MTG_MERFISH.2024-12-11.cell_prox_agg.txt.gz")
+# )
+
+prox_lm
+
+# lets look at some numbers of each type of cells to see if that is impacting the result 
+counts <- pDataDT(gobj)[, .N, by = .(Subclass, `Donor ID`)]
+counts
+
+# plot it proportionally
+ggplot(counts, aes(x = `Donor ID`, y = N, fill = Subclass)) + 
+  geom_bar(stat = 'identity', position = 'fill') +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = as.vector(palette.colors(n = 24, palette = "Alphabet")))
+  
+```
+So we can see that the top scorer is a negligible count cell type, and that may produce unreliable swings in data. In reality, proximity changes are potentially more relevant to other disease types such as cancer, where the cancer cells themselves may form a body around which other cells may gravitate.
+
+Still, one last exploration is to examine the actual connections in the tissue. Lets pick one of the `hetero` matches with larger numbers, `Astrocyte--Oligodendrocyte`
+```{r, prox_plot}
+# plot the connections between interesting pairs
+top <- "Astrocyte--Oligodendrocyte"
+p_list <- lapply(names(gobjs), function(i) {
+  p <- cellProximitySpatPlot2D(gobjs[[i]],
+    interaction_name = top,
+    show_network = TRUE,
+    cluster_column = "Subclass",
+    cell_color = "Subclass",
+    cell_color_code = c(Astrocyte = "lightblue", Oligodendrocyte = "red"),
+    point_size_select = 0.5, 
+    point_size_other = 0.5,
+    save_plot = FALSE,
+    return_plot = TRUE
+  )
+  p + ggtitle(paste(i, top))
+})
+wrap_plots(p_list) + plot_layout(guides = 'collect')
+p_list
+```
 
 
 
 ## Interaction changed features
+
+Moving onto our third categor
 ```{r, spat_icf}
 
 # ## select top 25th highest expressing genes

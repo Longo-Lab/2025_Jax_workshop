@@ -29,6 +29,7 @@ knitr::opts_chunk$set(
 # packages to load
 library(Seurat) # uses presto, MAST, and DESeq2
 library(ggplot2)
+library(ggrepel)
 library(data.table)
 library(future) # should be installed by Seurat
 library(Giotto)
@@ -40,6 +41,24 @@ library(limma)
 # we will be working out of the data folder
 # data_path <- ("/sbgenomics/projects/asliuyar/asliuyar/ad-omics/data/2_sc_spatial_Butler")
 data_path <- getwd()
+
+# Functions ------------------------------------------------------------
+#' Generalized linear model based on a flexible formula
+#'
+#' @param dat Data.table with the original data
+#' @param outcome String specifying the column in dat containing the outcome variable 
+#' @param exposure String specifying the column in dat containing the exposure variable
+#' @param covs Vector of column names containing covariates to be included in the formula
+#' @param fam error distribution and link function for model
+#'
+#' @returns A named list: 'Estimate' (beta), 'Std. Error' (se), 't value' (test statistic), 'Pr(>|t|)' (p-value), 'nobs' (number of observations)
+get_linreg <- function(dat, outcome, exposure, covs=c(), fam = gaussian){
+  model <- glm(paste(outcome, "~", paste(c(exposure, covs), collapse=" + ")),
+              na.action=na.exclude, data=dat, family = fam)
+  a <- summary(model)
+  return(as.list(c(a$coefficients[2, ], nobs=nobs(model))))
+}
+
 
 ```
 
@@ -369,7 +388,8 @@ instructions(gobj,
 
 # finally, we are going to pull out some sample metadata for later
 meta <- pDataDT(gobj)
-meta <- unique(meta[, .(`Donor ID`, Group, Sex, `Age at Death`)])
+meta <- unique(meta[, .(`Donor ID`, Group, Sex, `Age at Death`, `Continuous Pseudo-progression Score`)])
+setnames(meta, "Continuous Pseudo-progression Score", "Pseudo_prog")
 meta$`Donor ID` <- factor(meta$`Donor ID`, levels = meta$`Donor ID`)
 meta[`Donor ID` == "H21.33.015", `Age at Death` := "98"]
 meta$`Age at Death` <- as.integer(as.character(meta$`Age at Death`))
@@ -396,7 +416,9 @@ Sadly, our MERFISH data will limit RNA counts to the cell level, where each poin
 
 Rather than use all 12 donors for this example, we have the three matched `ad` and `ctrl` samples (as best as we can) with strong differential pseudo-progression scores and `Overall Neuropathological Change`. To get these from the overall dataset takes some work, but for now lets examine how they look in space. 
 
-Prompt: Do you see any notable spatial features?  
+> :info: Do you see any notable spatial features?  
+
+
 ```{r, init_spatplot}
 p <- spatPlot(gobj, 
   cell_color = "Subclass",
@@ -411,7 +433,7 @@ p + labs(subtitle = paste(meta$`Donor ID`, collapse = "       ")) +
 Each of these blocks represents a section through the cortex, from L1 --> white matter at the bottom.
 Layers of neurons tend to be easily recognized transcriptomically, and this has been the case across multiple datasets (Yao 2021, Yao 2024, Lots more can be included). This actually extends to brain regions as well, as the Allen Institute's recent series of papers (Yao 2024, Merscope paper 2024). This can make it sort of easy to compare Layers between single-cell RNAseq and spatial RNAseq, though there is no replacement for the actual spatial information.
 
-Bonus: How would I identify the `Donor ID` if I was trying to look at it?
+> :okay: Bonus: How would I identify the `Donor ID` if I was trying to look at it?
 
 
 ## Remember our steps
@@ -425,7 +447,7 @@ Thinking back to the single-cell data, there were a series of steps:
 6. Find Clusters
 7. Run UMAP
 
-> .callout_info Do those still apply for spatial data? 
+> :info: Do those still apply for spatial data? 
 
 For the most part, excepting that we are integrating using `g_col`, which if you notice has changed to `"Donor ID"`. We'll cover why in a bit, but here's a big clue. We also can actually use spatial information in our Neighbors/Clusters step to make our clustering more constrained to spatial zones. 
 
@@ -559,8 +581,15 @@ Up until now, we have been able to look at the combined set of all slides. Howev
 gobjs <- splitGiotto(gobj, by = g_col)
 
 # We have to create a spatial network for each slide based on physical distance of cell centroids
-gobjs <- lapply(gobjs, createSpatialNetwork)
-gobjs <- lapply(gobjs, createSpatialGrid, sdimx_stepsize = 500, sdimy_stepsize = 500, minimum_padding = 50)
+gobjs <- lapply(gobjs, function(i) {
+  i %>%
+    createSpatialNetwork() %>%
+    createSpatialGrid(
+      sdimx_stepsize = 500, 
+      sdimy_stepsize = 500, 
+      minimum_padding = 50
+    ) -> i
+})
 
 # example of a spatial networks (small window)
 smallfov <- subsetGiottoLocs(gobjs[[1]],
@@ -580,7 +609,7 @@ spatPlot(smallfov,
 
 ```
 
-> .callout_info Multiple samples per group
+> :info: Multiple samples per group
 >
 > If you don't have multiple images per group, you can rely on the default output for the single image, you will simply not have the extra layer of statistical confidence on between group differences.
 
@@ -784,38 +813,78 @@ agg
 
 ```
 
-Now let's look at the top changing genes across the two conditions. We can use a common DE package that can handle log transformed values like `limma`.
+Now let's look at the top changing genes across the two conditions. This time we won't have log transformed expression values, so we will have to rely on a generalized linear model for logistic regression (`ad` vs `ctrl`)
+
 ```{r, prox_feats_de}
-# to test differences in average expression in high cells, use limma's lmFit ---
-# make a table of the av_expr for each Donor
-exp <- data.frame(
-  dcast(prox_tab, unified_int ~ `Donor ID`, value.var = 'PI_value'), 
-  row.names = 'unified_int'
-)
 
-# reorder and set the disease status for limma
-exp <- exp[, levels(meta$`Donor ID`)]
-design <- model.matrix(~ Group + Sex + `Age at Death`, data = meta)
+# make a table of all of the data for each Donor (rows)
+exp <- dcast(prox_tab, `Donor ID` ~ unified_int, value.var = 'PI_value')
+exp <- merge(meta, exp)
+names(exp) <- make.names(names(exp)) # glm has a thing with dashes in names
 
-# sample level ad vs ctrl
-prox_lm <- as.data.table(
-  topTable(eBayes(lmFit(exp, design)), number = nrow(exp), coef = 2), 
-  keep.rownames = "unified_int"
-) 
+# make output table
+prox_lm <- unique(prox_tab[, .(unified_int = make.names(unified_int))])
+
+# fast run function
+prox_lm[, 
+  c("estimate", "se", "z", "p", "nobs") := get_linreg(
+    dat = exp, 
+    outcome = "Group", 
+    exposure = unified_int, 
+    covs = c("Sex", "Age.at.Death"), 
+    fam = binomial(link = logit)
+  ),
+  by=.I
+]
+prox_lm[, padj := p.adjust(p, method = "fdr")] 
+prox_lm[order(p)]
+
+```
+
+> :warning: What happened?
+
+
+This is a situation referred to as [complete separation](https://stats.oarc.ucla.edu/other/mult-pkg/faq/general/faqwhat-is-complete-or-quasi-complete-separation-in-logisticprobit-regression-and-how-do-we-deal-with-them). There is a covariate or combination of covariates that completely separates the outcome variable. You can try rerunning it without either (or both)  the Age and Sex covariates, as dropping each separately fixes some of the overlarge estimates. 
+
+In reality, you would not be running three samples per group with to known disease modifying covariates. Luckily we happen to have an ace in the hole. Instead of running logistic regression, we can use pseudo-progression as a linear outcome.
+
+```{r, prox_feats_de_deux}
+
+# make output table
+prox_lm <- unique(prox_tab[, .(unified_int = make.names(unified_int))])
+
+# Try this again, but with a linear regression
+prox_lm[, 
+  c("estimate", "se", "z", "p", "nobs") := get_linreg(
+    dat = exp, 
+    outcome = "Pseudo_prog", 
+    exposure = unified_int, 
+    covs = c("Sex", "Age.at.Death") 
+  ),
+  by=.I
+]
+prox_lm[, padj := p.adjust(p, method = "fdr")] 
+
+# fix those names
+prox_lm[, unified_int := gsub("..", "--", unified_int, fixed = TRUE)]
+prox_lm[, unified_int := gsub("ia.PV", "ia-PV", unified_int, fixed = TRUE)]
+prox_lm[, unified_int := gsub("L2.3", "L2/3", unified_int, fixed = TRUE)]
+prox_lm[, unified_int := gsub("L5.6", "L5/6", unified_int, fixed = TRUE)]
+prox_lm[, unified_int := gsub(".", " ", unified_int, fixed = TRUE)]
 
 # merge with aggregate spatial scores
 prox_lm <- merge(prox_lm, agg, by = 'unified_int')
-setorder(prox_lm, adj.P.Val, P.Value)
+setorder(prox_lm, padj, p)
 # fwrite(prox_lm, file = "SEAAD_MTG_MERFISH.2024-12-11.cell_prox_agg.txt.gz")
 # prox_lm <- fread(
 #   file.path(data_path, "SEAAD_MTG_MERFISH.2024-12-11.cell_prox_agg.txt.gz")
 # )
 
-prox_lm
+prox_lm[order(p)]
 
 # lets look at some numbers of each type of cells to see if that is impacting the result 
 counts <- pDataDT(gobj)[, .N, by = .(Subclass, `Donor ID`)]
-counts
+dcast(counts, Subclass ~ `Donor ID`)
 
 # plot it proportionally
 ggplot(counts, aes(x = `Donor ID`, y = N, fill = Subclass)) + 
@@ -824,10 +893,44 @@ ggplot(counts, aes(x = `Donor ID`, y = N, fill = Subclass)) +
   scale_fill_manual(values = as.vector(palette.colors(n = 24, palette = "Alphabet")))
   
 ```
-So we can see that the top scorer is a negligible count cell type, and that may produce unreliable swings in data. In reality, proximity changes are potentially more relevant to other disease types such as cancer, where the cancer cells themselves may form a body around which other cells may gravitate.
 
-Still, one last exploration is to examine the actual connections in the tissue. Lets pick one of the `hetero` matches with larger numbers, `Astrocyte--Oligodendrocyte`
-```{r, prox_plot}
+Proximity changes are potentially more relevant to other disease types such as cancer, where the cancer cells themselves may form a body around which other cells may gravitate. We can see that the top scorers are not padj significant, but can still take a look and see why they may be interesting. 
+
+First up makes little sense in terms of the types suggested, as L6 and L2/3 should rarely if ever overlap. But looking at the cell counts per sample, these are robust populations. So lets visualize the connections.
+
+```{r, prox_plot_1}
+# plot the connections between interesting pairs
+top <- "L2/3 IT--L6 IT Car3"
+p_list <- lapply(names(gobjs), function(i) {
+  p <- cellProximitySpatPlot2D(gobjs[[i]],
+    interaction_name = top,
+    show_network = TRUE,
+    cluster_column = "Subclass",
+    cell_color = "Subclass",
+    network_color = 'black',
+    cell_color_code = c(`L2/3 IT` = "lightblue", `L6 IT Car3` = "red"),
+    point_size_select = 1, 
+    point_size_other = 1,
+    save_plot = FALSE,
+    return_plot = TRUE
+  )
+  p + ggtitle(paste(i, meta[`Donor ID` == i, Group], sep = " - "))
+})
+
+# # plot all together
+# wrap_plots(p_list) + plot_layout(guides = 'collect')
+
+# or separately 
+p_list
+
+```
+
+Given how few cells are actually connecting in our sample relative to how many of each cell type are present, it seems more likely an annotation artifact.
+
+In the case of `L5 ET` is a low count cell type (which can produce some inflated variance in estimated occurrence). 
+
+One last exploration is to examine the actual connections in the tissue. Lets pick one of the `hetero` matches with larger numbers, `Astrocyte--Oligodendrocyte`
+```{r, prox_plot_2}
 # plot the connections between interesting pairs
 top <- "Astrocyte--Oligodendrocyte"
 p_list <- lapply(names(gobjs), function(i) {
@@ -836,78 +939,307 @@ p_list <- lapply(names(gobjs), function(i) {
     show_network = TRUE,
     cluster_column = "Subclass",
     cell_color = "Subclass",
-    cell_color_code = c(Astrocyte = "lightblue", Oligodendrocyte = "red"),
-    point_size_select = 0.5, 
-    point_size_other = 0.5,
+    network_color = 'black',
+    cell_color_code = c(`Astrocyte` = "lightblue", `Oligodendrocyte` = "red"),
+    point_size_select = 1, 
+    point_size_other = 1,
     save_plot = FALSE,
     return_plot = TRUE
   )
-  p + ggtitle(paste(i, top))
+  p + ggtitle(paste(i, meta[`Donor ID` == i, Group], sep = " - "))
 })
-wrap_plots(p_list) + plot_layout(guides = 'collect')
+
+# # plot all together
+# wrap_plots(p_list) + plot_layout(guides = 'collect')
+
+# or separately 
 p_list
+
 ```
 
-
+This one is interesting at least in that there are a fair few interactions, and a hint of something different in the lower layers for `ad`. What we would need to be certain is higher number of samples.
 
 ## Interaction changed features
 
-Moving onto our third categor
+Moving onto our third category, interaction changed features. Rather than specifically labeling dynamic changes in cell location, we can ask are there any genes in a given cell that change in expression when it is in proximity to another type of cell. Do neurons talk differently when microglia are around? We can test this for every cell type and it's proximity to every other cell type, for every gene, but that becomes...taxing. So for now lets look at the most expressed genes.
 ```{r, spat_icf}
 
-# ## select top 25th highest expressing genes
-# gene_metadata <- fDataDT(SS_seqfish)
-# 
-# plot(gene_metadata$nr_cells, gene_metadata$mean_expr)
-# 
-# plot(gene_metadata$nr_cells, gene_metadata$mean_expr_det)
-# 
-# quantile(gene_metadata$mean_expr_det)
-# 
-# high_expressed_genes <- gene_metadata[mean_expr_det > 3.5]$feat_ID
-# 
-# ## identify genes that are associated with proximity to other cell types
-# plan("multisession", workers = 6)
-# 
-# ICFsForesHighGenes <- findInteractionChangedFeats(
-#     gobject = SS_seqfish,
-#     selected_feats = high_expressed_genes,
-#     spatial_network_name = "Delaunay_network",
-#     cluster_column = "cell_types"
-#     diff_test = "permutation",
-#     adjust_method = "fdr",
-#     nr_permutations = 2000,
-#     do_parallel = TRUE
-# )
-# 
-# ## visualize all genes
-# plotCellProximityFeats(SS_seqfish,
-#                        icfObject = ICFsForesHighGenes,
-#                        method = "dotplot")
-# 
-# ## filter genes
-# ICFscoresFilt <- filterICF(ICFsForesHighGenes)
-# 
-# ## visualize subset of interaction changed genes (ICFs)
-# ICF_genes <- c("Jakmip1", "Golgb1", "Dact2", "Ddx27", "Abl1", "Zswim8")
-# ICF_genes_types <- c("Lhx6 iNeuron", "Lhx6 iNeuron", "L4 eNeuron", "L4 eNeuron", "astrocytes", "astrocytes")
-# names(ICF_genes) <- ICF_genes_types
-# 
-# plotICF(gobject = SS_seqfish,
-#         icfObject = ICFsForesHighGenes,
-#         source_type = "endothelial",
-#         source_markers = c("Pltp", "Cldn5", "Apcdd1"),
-#         ICF_feats = ICF_genes
-# )
+# select top 25th highest expressing genes
+gene_meta <- fDataDT(gobj)
+high_exp <- gene_meta[
+  mean_expr_det > quantile(mean_expr_det, probs = 0.75),
+  feat_ID
+]
+gene_meta[, labs := ifelse(mean_expr_det > quantile(mean_expr_det, probs = 0.75), feat_ID, NA)]
+
+# which look like?
+ggplot(gene_meta, aes(x = nr_cells, y = mean_expr_det, label = labs)) +
+  geom_point() + 
+  geom_text_repel(max.overlaps = 20) +
+  theme_classic()
 
 ```
 
-# Single-cell x Spatial analysis (interactive)
-1.	Differential ligand-receptor analysis
-2.	Differential spatial relationships
-3.	(maybe) Correlation to TREAT-AD
+To move more efficiently, we can utilize multiple cores. Even still, at full bore with a subset of genes this takes 15-20 minutes! Cluster computing becomes really essential for these last spatial data types, as they will run for hours/days. I lowered it to 100 permutations just to try it out, but we then load the saved result.  
 
-# Conclusion concepts (lecture)
-(Maybe with time) Future promising tools (lecture or demo, non-interactive)
+```{r, icf_calc}
+## identify genes that are associated with proximity to other cell types
+plan("multisession", workers = 8)
+
+# ICFs <- lapply(gobjs, findInteractionChangedFeats,
+#   selected_feats = high_exp,
+#   cluster_column = "Subclass",
+#   # diff_test = "permutation",
+#   adjust_method = "fdr",
+#   nr_permutations = 10,
+#   do_parallel = TRUE
+# )
+# saveRDS(ICFs, file = "SEAAD_MTG_MERFISH.2024-12-11.icf_raw.rds")
+ICFs <- readRDS(
+  file.path(data_path, "SEAAD_MTG_MERFISH.2024-12-11.icf_raw.rds")
+)
+
+# lets filter and simplify the results so we can take a closer look
+ICFscoresFilt <- lapply(ICFs, filterICF,
+  min_cells = 10,
+  min_int_cells = 10,
+  min_cells_expr = 2,
+  min_int_cells_expr = 2,
+  min_fdr = 0.05,
+  min_spat_diff = 0.2,
+  min_log2_fc = 0.5,
+  min_zscore = 2
+)
+ICFscoresFilt <- lapply(ICFscoresFilt, function(i) i[['ICFscores']])
+ICFscoresFilt <- rbindlist(ICFscoresFilt, idcol = g_col)
+ICFscoresFilt[order(zscores)]
+
+```
+
+Now it is getting really tricky to interpret. Here are some key output metrics:
+
+- `sel`: average feature expression in the interacting cells from the target cell type
+- `other`: average feature expression in the NOT-interacting cells from the target cell type
+- `log2fc`: log2 fold-change between sel and other
+- `diff`: spatial expression difference between sel and other
+- `p.adj`: adjusted p-value
+- `cell_type`: target cell type
+- `int_cell_type`: interacting cell type
+
+You are doing a statistical test in each sample to test whether gene expression is different in interacting **target** cells versus non interacting **target** cells. In this case permutations of cell type labels are similar to before, but you are **NOT** testing your value directly against random permutations.
+
+We are also introducing a new concept, `target` and `interacting` cell types. 
+
+Finally, to standardize this, we filter the large number of target-interactor-feature combinations, and then z-scale against all cell types in a given sample to control for sample to sample comparison.
+```{r, icf_feats_filt}
+# get the top scoring set from any sample 
+top <- unique(ICFscoresFilt[, .(feats, cell_type, int_cell_type)])
+
+# get the raw stats for those from EVERY sample
+ICFscoresFilt <- lapply(ICFs, filterICF,
+  min_cells = 10,
+  min_int_cells = 10,
+  min_cells_expr = 0,
+  min_int_cells_expr = 0,
+  min_fdr = 1.01,
+  min_spat_diff = 0,
+  min_log2_fc = 0,
+  min_zscore = 0
+)
+
+# subset of only those in teh top list
+all_top_scores <- lapply(ICFscoresFilt, function(i) {
+  x <- merge(i$ICFscores, top, by = c("feats", "cell_type", "int_cell_type"))
+})
+all_top_scores <- rbindlist(all_top_scores, idcol = g_col)
+
+```
+
+Now that we have z-scores and avg log2FC for all the samples lets aggregate that
+```{r, icf_int_rank}
+# first, lets calculate the mean values for each group
+all_top_scores[, feat_by_int := paste(feats, cell_type, int_cell_type, sep = "_")]
+agg <- merge(
+  x = all_top_scores[
+    `Donor ID` %in% meta[Group == 'ad', `Donor ID`], 
+    .(avg_L2FC.ad = mean(log2fc), avg_zscore.ad = mean(zscores)), 
+    by = "feat_by_int"
+  ],
+  y = all_top_scores[
+    `Donor ID` %in% meta[Group == 'ctrl', `Donor ID`], 
+    .(avg_L2FC.ctrl = mean(log2fc), avg_zscore.ctrl = mean(zscores)), 
+    by = "feat_by_int"
+  ]
+)
+
+# now lets check if any interactions showed an average difference
+agg[, dL2FC.ad.vs.ctrl := avg_L2FC.ad - avg_L2FC.ctrl]
+agg[, dzscore.ad.vs.ctrl := avg_zscore.ad - avg_zscore.ctrl]
+setorder(agg, -dL2FC.ad.vs.ctrl)
+
+agg
+
+```
+
+And finally, lets test the significant of the change in log2fc of expression with interactor versus without.
+```{r, icf_feats_de}
+# make a table of all of the data for each Donor (rows)
+exp <- dcast(all_top_scores, feat_by_int ~ `Donor ID`, value.var = 'log2fc')
+exp <- exp[complete.cases(exp)]
+exp <- merge(meta, transpose(exp, keep.names = "Donor ID", make.names = "feat_by_int"))
+names(exp) <- make.names(names(exp)) # glm has a thing with dashes in names
+
+
+# make output table
+icf_lm <- unique(all_top_scores[, .(feat_by_int = make.names(feat_by_int))])
+icf_lm <- icf_lm[feat_by_int %in% names(exp)]
+
+# Try this again, but with a linear regression
+icf_lm[, 
+  c("estimate", "se", "z", "p", "nobs") := get_linreg(
+    dat = exp, 
+    outcome = "Pseudo_prog", 
+    exposure = feat_by_int, 
+    covs = c("Sex", "Age.at.Death") 
+  ),
+  by=.I
+]
+icf_lm[, padj := p.adjust(p, method = "fdr")] 
+
+# fix those names
+icf_lm[, feat_by_int := gsub("..", "--", feat_by_int, fixed = TRUE)]
+icf_lm[, feat_by_int := gsub("ia.PV", "ia-PV", feat_by_int, fixed = TRUE)]
+icf_lm[, feat_by_int := gsub("L2.3", "L2/3", feat_by_int, fixed = TRUE)]
+icf_lm[, feat_by_int := gsub("L5.6", "L5/6", feat_by_int, fixed = TRUE)]
+icf_lm[, feat_by_int := gsub(".", " ", feat_by_int, fixed = TRUE)]
+
+# merge with aggregate spatial scores
+icf_lm <- merge(icf_lm, agg, by = 'feat_by_int')
+setorder(icf_lm, padj, p)
+# fwrite(icf_lm, file = "SEAAD_MTG_MERFISH.2024-12-11.icf_agg.txt.gz")
+# icf_lm <- fread(
+#   file.path(data_path, "SEAAD_MTG_MERFISH.2024-12-11.icf_agg.txt.gz")
+# )
+
+icf_lm[order(p)]
+
+```
+
+
+Let's plot this in one sample to visualize what we are looking at.
+```{r, icf_plot}
+# grab the unfiltered top feat_by_int set
+filt_top_scores <- lapply(ICFscoresFilt, function(i) i[['ICFscores']])
+filt_top_scores <- rbindlist(filt_top_scores, idcol = g_col)
+filt_top_scores[, lab := ifelse(p.adj < 0.05, "*", "")]
+filt_top_scores$`Donor ID` <- factor(filt_top_scores$`Donor ID`, levels = meta$`Donor ID`)
+
+# L2/3 IT as the target cell type
+myPalette <- colorRampPalette(rev(RColorBrewer::brewer.pal(11, "RdBu")))
+p1 <- ggplot(
+  data = filt_top_scores[
+    cell_type == "L2/3 IT" 
+    & int_cell_type == "Pvalb" 
+    & feats %in% c("RORB", "MOG", "RGS6")
+  ], 
+  mapping = aes(x = `Donor ID`, y = feats, fill = log2fc, label = lab)) + 
+  geom_tile() +
+  geom_text(size = 10) + 
+  scale_fill_gradientn(colors = myPalette(100)) +
+  labs(x = "Donor ID", title = "L2/3 IT Genes interacting with Pvalb") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+    plot.title = element_text(hjust = 0.5, face = 'bold')
+  )
+p1
+
+# L2/3 IT as the interacting cell type
+p2 <- ggplot(
+  data = filt_top_scores[
+    cell_type %in% c("VLMC", "OPC", "Lamp5") 
+    & int_cell_type == "L2/3 IT" 
+    & feats %in% c("CLSTN2", "CUX2", "CBLN2")
+  ], 
+  mapping = aes(x = `Donor ID`, y = feats, fill = log2fc, label = lab)) + 
+  geom_tile() +
+  geom_text(size = 10) + 
+  facet_grid(.~cell_type) +
+  scale_fill_gradientn(colors = myPalette(100)) +
+  labs(x = "Donor ID", title = "Cell types whose Genes interact with L2/3 IT") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+    plot.title = element_text(hjust = 0.5, face = 'bold')
+  )
+p2
+
+# How about this one, DE?
+de[Symbol == "RORB"][order(p_val_adj, p_val)] 
+
+
+```
+
+That presents a pretty good preliminary finding that RORB in L2/3 IT cells is increasing in ad, specifically in the presence of Parvalbumin GABAergic neurons.
+
+Important to remember, we looked at only the top markers, from a MERFISH panel specifically of cell type markers. Other spatial transcriptomic panels.
+
+
+
+# Conclusion: ligand-receptors, intersections with single-cell, and takeaways (lecture)
+
+We won't have time today to cover the fourth type of spatial data: **Cell-cell ligand receptor interactions**
+
+These logically take the next step, although it gets even more complicated to consider the co-occurrence of a target cell expressing an ICF (ligand), and an interacting cell expressing it's own ICF (receptor). These analyses are explored in detail in both single-cell and spatial analyses, allowing to address a key concern...
+
+> :warning: Takeaway 
+> 
+> interacting cells in spatial data can "express" genes from the other cell type?
+
+No, they likely don't. What is more likely is that cell segmentation has drawn a cell boundary over the overlap of two cell types. This is a key reason to always validate spatial findings elsewhere. Single-cell/nuc provides a pretty robust check, as fluid dynamics have separated those cells (assuming you filtered your doublets).
+
+## Single-cell x Spatial analysis
+1.	Differential ligand-receptor analysis
+
+This can be done in any number of platforms, there is a whole [paper]() that is already out of date on the subject. This field is moving fast!
+[img]()
+
+In my case, I am presenting at AAIC our work with [liana]() that aggregates multiple software and can also incorporate 4D tensor differential analysis. To summarize, for tau pathology mice, for Glutamatergic neurons the have ligand receptor enrichments for the disease, that are in some cases reversed by treatment with a Longo Lab therapeutic, LM11A-31.
+[img]()
+
+Notably, both L4 IT CTX and L2/3 IT CTX neurons independently differentially express Apoe. Making it a really compelling target tosee if this relationship is enriched when the two cell types come closer to one another.
+
+2.	Differential spatial relationships
+
+Indeed, using the CosMx 1k Mouse Neuroscience Panel, we can look at a fair number of relevant molecules.  
+[img]()
+
+Still missing a bunch though, including key ones. Hopefully as 5k, 6k, and whole transcriptomic panels emerge, they will make this even more compelling. However, more genes does mean more computationally intensive.
+
 ## Spacia + downstream genes in target cell
+
+As new tools come online, you can further explore the relevant consequences of these spatial relationships. Tools like Spacia can identify genes in Astrocytes, that are correlated to Apoe expression in L4 IT CTX neurons
+
+[img]()
+
 ## Multimodal integration tools
+
+And future frontiers are already here on multimodal analyses (I hear there is a session on that later in the week...) 
+
+
+Ultimately, I hope this gave you a start on concepts in this space and how to approach them with some existing tools. New tools will emerge, but if you can understand what information these types of findings can tell you:
+
+Single-cell/nucleus transcriptomics
+
+1. Differential expression
+2. Cell-cell communcation
+
+
+Spatial transcriptomics
+
+1. Spatial features - is a gene more highly in a specific spatial region?
+2. Cell-cell proximity - once identified, do cell types occur more closely to one another?
+3. Interaction changed features - in those cells, does gene expression change based on proximity?
+4. Ligand-receptor interaction - proximity expression, but tested for ligand-receptor pairs in source-target cell types.
+
+Then you will be able to use that boat-load of money you just spent!

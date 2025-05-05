@@ -89,7 +89,8 @@ Today we are going to be using sample data from [SEA-AD](https://portal.brain-ma
 
 
 This data is publicly available, and a really useful resource:
-|![SEA-AD](https://github.com/Longo-Lab/2025_Jax_workshop/blob/img/img/sea-ad_cropped.png)| [AWS host](https://registry.opendata.aws/allen-sea-ad-atlas/)|
+|:-:|:-:|
+|![SEA-AD](https://github.com/Longo-Lab/2025_Jax_workshop/blob/main/img/sea-ad_cropped.png)| [AWS host](https://registry.opendata.aws/allen-sea-ad-atlas/)|
 
 
 For our purposes having matched snRNAseq and spatial transcriptomic data allows us to compare the the two data types in our analysis. 
@@ -385,13 +386,13 @@ Previously Dr. McClatchy taught a very good workshop on the first generation of 
 > What are some approaches to capturing spatial data?
 
 
-The 30 second breakdown for what is spatial technology:
+The 30 second breakdown for major classes of spatial transcriptomics:
 
 1. Spot-based sequencing across a slide, followed by sequencing
-![img]()
+![https://commons.wikimedia.org/wiki/File:Spatial_transcriptomics_ii.png](https://upload.wikimedia.org/wikipedia/commons/1/14/Spatial_transcriptomics_ii.png)
 
 2. Probe-based imaging using serial washes of probes and imaging
-![img]()
+![https://nanostring.com/products/cosmx-spatial-molecular-imager/single-cell-imaging-overview/](https://github.com/Longo-Lab/2025_Jax_workshop/blob/main/img/cosmx_method.png)
 
 
 Each brings it's own caveats and costs, but for the present, the main limiting factor is number of genes. Spot-based systems can detect every gene you can sequence, grouped into spots/pixels/hexagons. Probe based systems you need a probe for each gene, but you get the physical location of the actual transcript, to the subcellular level. Currently a few companies are making advances in probe stability to allow thousands of probes, but most current efforts get a few hundred genes up to 1k. 
@@ -404,6 +405,7 @@ Each brings it's own caveats and costs, but for the present, the main limiting f
 
 
 Spatial data of either type can be evaluated in four conceptual frameworks (so far):
+
 1. Spatial features - is a gene more highly in a specific spatial region?
 2. Cell-cell proximity - once identified, do cell types occur more closely to one another?
 3. Interaction changed features - in those cells, does gene expression change based on proximity?
@@ -459,7 +461,15 @@ gobj <- loadGiotto(
 
 
 ## Check-in
-So we can examine the Giotto object in detail, it is based on the [terra](https://rspatial.github.io/terra/index.html) spatial data package, and makes for objects that can store many different [types](https://drieslab.github.io/Giotto_website/articles/structure.html#giotto-object-structure) of information:
+Giotto it is based on the [terra](https://rspatial.github.io/terra/index.html) spatial data package, and makes for objects that can store many different [types](https://drieslab.github.io/Giotto_website/articles/structure.html#giotto-object-structure) of information:
+
+![Giotto](https://drieslab.github.io/Giotto_website/articles/images/ecosystem/modules.png)
+
+
+So we can examine the Giotto object in detail to figure out the format.
+
+
+> What types of data does Giotto support?
 
 
 ```{r, update_giotto}
@@ -474,6 +484,17 @@ instructions(gobj,
   param = c("save_dir", "save_plot", "return_plot")
 ) <- list(getwd(), FALSE, TRUE)
 
+```
+
+
+We can see that "features" is not limited to RNA, but can be multimodal. There are also spatial unit, which is currently `cell`, but is similarly not contstrained. These are polygons that can be drawn interactively (different workshop) and labeled.
+
+
+> What other types of polygons might fit in the spat_unit slot?
+
+
+```{r, get_spat_metadata}
+
 # finally, we are going to pull out some sample metadata for later
 meta <- pDataDT(gobj)
 meta <- unique(meta[, .(`Donor ID`, Group, Sex, `Age at Death`, `Continuous Pseudo-progression Score`)])
@@ -486,7 +507,7 @@ meta
 ```
 
 
-Another potential benefit is that certain spatial technologies allow exact RNA positioning, and immunostained images to be underlayed behind your cell labels, for very cool images at real sub-cellular resolution!
+Probe based spatial technologies allow exact RNA positioning, and immunostained images to be underlayed behind your cell `spat_unit` labels, for very cool images at real sub-cellular resolution!
 
 
 ```{r, test_picture}
@@ -1321,29 +1342,33 @@ No, they likely don't. What is more likely is that cell segmentation has drawn a
 1.	Differential ligand-receptor analysis
 
 This can be done in any number of platforms, there is a whole [paper]() that is already out of date on the subject. This field is moving fast!
-[img]()
+[]()
 
 In my case, I am presenting at AAIC our work with [liana]() that aggregates multiple software and can also incorporate 4D tensor differential analysis. To summarize, for tau pathology mice, for Glutamatergic neurons the have ligand receptor enrichments for the disease, that are in some cases reversed by treatment with a Longo Lab therapeutic, LM11A-31.
-[img]()
+![In preparation](https://github.com/Longo-Lab/2025_Jax_workshop/blob/main/img/liana_ps19_c31.png)
 
 Notably, both L4 IT CTX and L2/3 IT CTX neurons independently differentially express Apoe. Making it a really compelling target tosee if this relationship is enriched when the two cell types come closer to one another.
 
 2.	Differential spatial relationships
 
 Indeed, using the CosMx 1k Mouse Neuroscience Panel, we can look at a fair number of relevant molecules.  
-[img]()
+![In preparation](https://github.com/Longo-Lab/2025_Jax_workshop/blob/main/img/spatial_lr_ps19_c31.png)
 
 Still missing a bunch though, including key ones. Hopefully as 5k, 6k, and whole transcriptomic panels emerge, they will make this even more compelling. However, more genes does mean more computationally intensive.
 
 ## Spacia + downstream genes in target cell
+As new tools come online, you can further explore the relevant consequences of these spatial relationships. For instance, Spacia uses a Bayesian multiple instance learning to define a target cell's receptor engagement from multiple surrounding cells to determing a greater level of context to cell-cell communication.
 
-As new tools come online, you can further explore the relevant consequences of these spatial relationships. Tools like Spacia can identify genes in Astrocytes, that are correlated to Apoe expression in L4 IT CTX neurons
+![https://www.nature.com/articles/s41592-024-02408-1](https://github.com/Longo-Lab/2025_Jax_workshop/blob/main/img/spacia_method.png)
 
-[img]()
+Tools like Spacia can identify genes in Astrocytes, that are correlated to Apoe expression in L4 IT CTX neurons
+
+![In preparation](https://github.com/Longo-Lab/2025_Jax_workshop/blob/main/img/spacia_astrocyte.png)
 
 ## Multimodal integration tools
 
 And future frontiers are already here on multimodal analyses (I hear there is a session on that later in the week...) 
+![https://biofam.github.io/MOFA2/](https://biofam.github.io/MOFA2/images/mofa_overview.png)
 
 
 Ultimately, I hope this gave you a start on concepts in this space and how to approach them with some existing tools. New tools will emerge, but if you can understand what information these types of findings can tell you:

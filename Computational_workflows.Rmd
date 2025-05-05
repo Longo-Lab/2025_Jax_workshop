@@ -10,16 +10,23 @@ output:
     fig_align: center
 ---
 
+
 # Introductory concepts (lecture)
 Hello and welcome to the course! 
 
+
 We are going to cover a lot of material on analysis of transcripts of individual cells in two formats, single-cell/nucleus and spatial transcriptomics. The concepts are hopefully generalizable to more types of data, depending on their format. In particular the Giotto object for spatial transcriptomics is already constructed for multiple types of spatial molecules beyond RNA.
+
 
 This course assumes you have a working knowledge of R, but will remove the more complex aspects of deploying these analyses at scale (multithreading, gpus, batch scheduling, etc). For the most part we will rely on two R concepts to work efficiently: piping steps together with `%>%` and running functions on lists using `lapply`. Additionally, it makes use of the `data.table` object which is a much faster implementation of a data.frame with built in data processing features. 
 
+
 Also note that many of the concepts here have analgous implementations in python in formats such as [Scanpy](https://scanpy.readthedocs.io/) and [Squidpy](https://squidpy.readthedocs.io/). 
 
+
 First, lets load up some packages to get us going...
+
+
 ```{r, load_up, include = FALSE}
 # knitr options
 knitr::opts_chunk$set(
@@ -65,6 +72,7 @@ get_linreg <- function(dat, outcome, exposure, covs=c(), fam = gaussian){
 
 ```
 
+
 # Single-cell analysis (interactive)
 To begin, this course assumes you have a basic familiarity with single-cell analysis using the [Seurat](https://satijalab.org/seurat/) package. We won't cover in huge detail the major steps in a single-cell analysis, but leave it for you to explore. Our key steps:
 
@@ -76,8 +84,11 @@ To begin, this course assumes you have a basic familiarity with single-cell anal
 6. Find Clusters
 7. Run UMAP
 
+
 ## Prep the (cleaned) data
 This will define standard settings you intend to run for the analysis
+
+
 ```{r, get_sc_data}
 sc <- readRDS(file.path(data_path, "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds"))
 
@@ -92,8 +103,11 @@ resi <- 0.8
 
 ```
 
+
 ## Clean and Analyze
 The bulk of the processing can be done in rapid succession, with linking `%>%` chains (in R >4.4, they are now using `|>` pipes instead, but we'll leave it for backward compatibility)
+
+
 ```{r, sc_process, message = FALSE, warning = FALSE}
 if (integ) {
   # split by group column
@@ -143,9 +157,15 @@ if (integ) {
 
 ```
 
-How did that integration turn out? We can visualize with the two UMAPs if we did integration, or just plotting the standard UMAP if we did not. 
 
-Why did we split and integrate our experimental groups?
+> How did that integration turn out? 
+
+
+We can visualize with the two UMAPs if we did integration, or just plotting the standard UMAP if we did not. 
+
+
+> Why did we split and integrate our experimental groups?
+
 
 ```{r, integ_plot}
 if (integ) {
@@ -156,7 +176,10 @@ if (integ) {
   DimPlot(sc, reduction = "umap", group.by = "Donor.ID", shuffle = TRUE)
 }
 ```
+
+
 Generally, not a lot of improvement, the sequencing pipeline the Allen Inst. used seemed to be pretty consistent across donors.
+
 
 ## Cell type annotations (maybe link MapMyCells)
 Cell type identification is a class unto itself. Usually good methods involve a mix of automated cell type predictions, followed by careful curation to:
@@ -165,7 +188,10 @@ Cell type identification is a class unto itself. Usually good methods involve a 
 2. Eliminate heterotypic doublets & low quality cells
 3. Subcluster and define population subtypes.
 
+
 One useful tool for lightweight annotation prediction is the [MapMyCells](https://knowledge.brain-map.org/mapmycells/process) web server. In our case, we already have expertly curated cell types, defined by the XXXXXX column, as well as our experimental phenotype XXXXXX
+
+
 ```{r, annot_plot}
 # Selecting your umap to plot
 if (integ) {
@@ -186,10 +212,14 @@ p1 + p2
 
 ```
 
+
 ## Differential expression 
 Now that we have data, we can use Seurat's built in [tools](https://satijalab.org/seurat/articles/de_vignette) to examine AD vs control differences. Notably, there are multiple methods for testing, with various options. Tools like MAST have some more stringent tests that also allow for inclusion of latent variables to correct for. Confounding variables like "Donor.ID" or "Sex" can impact your results! 
 
+
 For now, we are going for speed, running the standard Wilcoxon Rank Sum test (sped up with [presto](https://github.com/immunogenomics/presto)) using an lapply call to run each cell type in a list. We can then use data.table to stack them up and do fast operations on them like count the totals of DE genes (p_val_adjust < 0.05):
+
+
 ```{r, sc_de}
 # which column contains cell types?
 ctype <- 'Subclass'
@@ -229,9 +259,13 @@ de <- fread(
 
 ```
 
+
 However, when doing differential expression it is important to consider that testing thousands of cells can inflate estimates of significance. Do you have a highly significant change with an `avg_log2FC` of 0.10 in less than 10% of your cell type (`pct.1` and `pct.2`). That may not reflect biologically relevant variability. In general you can limit this with certain options like limiting `max.cells.per.ident` for your comparisons. 
 
+
 The [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-analysis-after-pseudobulking) method is to construct pseudo-bulk datasets for a bulkRNAseq style measure with DESeq2. However, this can be an issue if you have few samples per group. In our case even with n == 6 per group there are only a few DE genes in any cells...
+
+
 ```{r, sc_de_pseudo}
 # # using pseudobulk analysis to control for within-sample correlation -----------
 # pseudo <- AggregateExpression(sc,
@@ -281,7 +315,10 @@ The [most robust](https://satijalab.org/seurat/articles/de_vignette#perform-de-a
 
 ```
 
+
 In the end, lets see what we got with some pictures
+
+
 ```{r, volcanoes}
 # Add a significant column with a nested ifelse
 de[, sig := ifelse(
@@ -328,16 +365,51 @@ wrap_plots(plist) + plot_layout(guides = 'collect')
 ```
 
 
-# Introduction spatial (lecture) (from Sue)
-Maybe just link to the broader [introduction](https://smcclatchy.github.io/spatial-transcriptomics/introduction.html) page?
+# Introduction spatial (lecture)
+So, spatial transcritomics is any of several technologies that can put spatial coordinates on RNA data. RIght now there are at least a dozen different platforms, and that is just in the RNA space.
+
+
+Previously Dr. McClatchy taught a very good workshop on the first generation of spatial data, using spot based sequencing. [read the tutorial](https://smcclatchy.github.io/spatial-transcriptomics/introduction.html) 
+
+
+> What are some approaches to capturing spatial data?
+
+
+The 30 second breakdown for what is spatial technology:
+
+1. Spot-based sequencing across a slide, followed by sequencing
+![img]()
+
+2. Probe-based imaging using serial washes of probes and imaging
+![img]()
+
+
+Each brings it's own caveats and costs, but for the present, the main limiting factor is number of genes. Spot-based systems can detect every gene you can sequence, grouped into spots/pixels/hexagons. Probe based systems you need a probe for each gene, but you get the physical location of the actual transcript, to the subcellular level. Currently a few companies are making advances in probe stability to allow thousands of probes, but most current efforts get a few hundred genes up to 1k. 
+
+
+## Spatial data 
+
+
+> What would you do with spatial information?
+
 
 Spatial data of either type can be evaluated in four conceptual frameworks (so far):
-![Insert diagram]() 
-
 1. Spatial features - is a gene more highly in a specific spatial region?
 2. Cell-cell proximity - once identified, do cell types occur more closely to one another?
 3. Interaction changed features - in those cells, does gene expression change based on proximity?
 4. Ligand-receptor interaction - proximity expression, but tested for ligand-receptor pairs in source-target cell types.
+
+
+This is were the different technologies show their big differences, as probe based allow for higher resolution information.
+
+|Info|Spot-based|Probe-based|
+|:-:|:-:|:-:|
+|Spatial region detection| Yes | Yes |
+|Spatial features diff expression| Yes | Yes |
+|Cell-cell proximity| No | Yes |
+|Interaction changed features| No | Yes |
+|Ligand-receptor interaction| No | Yes |
+
 
 More types of analysis are still developing, and the space can be described as...active. In particular one of the more challenging issues to address is how to analyze multiple samples and differential analysis across experimental groups. Most current analysis covers differences across regions within a single tissue sample. We will explore one particular methodology and talk briefly about the potential for novel approaches.
 
@@ -348,6 +420,8 @@ Part of the reason we chose the SEA-AD dataset as a reference, is because we can
 
 ## Set up the data
 As with before, there are some global settings to include, and lets load things into memory.
+
+
 ```{r, init_giotto}
 # lets save some space in memory
 remove(sc, pseudo)
@@ -377,6 +451,7 @@ gobj <- loadGiotto(
 ## Check-in
 So we can examine the Giotto object in detail, it is based on the [terra](https://rspatial.github.io/terra/index.html) spatial data package, and makes for objects that can store many different [types](https://drieslab.github.io/Giotto_website/articles/structure.html#giotto-object-structure) of information:
 
+
 ```{r, update_giotto}
 # what am i?
 gobj
@@ -400,7 +475,10 @@ meta
 
 ```
 
+
 Another potential benefit is that certain spatial technologies allow exact RNA positioning, and immunostained images to be underlayed behind your cell labels, for very cool images at real sub-cellular resolution!
+
+
 ```{r, test_picture}
 g <- GiottoData::loadGiottoMini("cosmx", verbose = FALSE)
 spatInSituPlotPoints(g, 
@@ -419,7 +497,7 @@ Sadly, our MERFISH data will limit RNA counts to the cell level, where each poin
 
 Rather than use all 12 donors for this example, we have the three matched `ad` and `ctrl` samples (as best as we can) with strong differential pseudo-progression scores and `Overall Neuropathological Change`. To get these from the overall dataset takes some work, but for now lets examine how they look in space. 
 
-> :info: Do you see any notable spatial features?  
+> Do you see any notable spatial features?  
 
 
 ```{r, init_spatplot}
@@ -433,10 +511,12 @@ p + labs(subtitle = paste(meta$`Donor ID`, collapse = "       ")) +
 
 ```
 
+
 Each of these blocks represents a section through the cortex, from L1 --> white matter at the bottom.
 Layers of neurons tend to be easily recognized transcriptomically, and this has been the case across multiple datasets (Yao 2021, Yao 2024, Lots more can be included). This actually extends to brain regions as well, as the Allen Institute's recent series of papers (Yao 2024, Merscope paper 2024). This can make it sort of easy to compare Layers between single-cell RNAseq and spatial RNAseq, though there is no replacement for the actual spatial information.
 
-> :okay: Bonus: How would I identify the `Donor ID` if I was trying to look at it?
+
+> Bonus: How would I identify the `Donor ID` if I was trying to look at it?
 
 
 ## Remember our steps
@@ -450,15 +530,20 @@ Thinking back to the single-cell data, there were a series of steps:
 6. Find Clusters
 7. Run UMAP
 
-> :info: Do those still apply for spatial data? 
+
+> Do those still apply for spatial data? 
+
 
 For the most part, excepting that we are integrating using `g_col`, which if you notice has changed to `"Donor ID"`. We'll cover why in a bit, but here's a big clue. We also can actually use spatial information in our Neighbors/Clusters step to make our clustering more constrained to spatial zones. 
+
 
 You may also notice that we are no longer regressing out donor level stats like `Age at Death` since samples are being integrated at the donor level for this step. Downstream analyses will examine each slice separately, and include these covariates in differential meta-analysis. Should you want to try and merge samples for a more complex analysis, you can adjust for additional covariates/batches using `adjustGiottoMatrix`.  
 
 
 ## Clean and prep
 This data has already been cleaned/filtered a fair bit by the SEA-AD group, but for informational purposes, lets look first at what a giotto object is and then filter/normalize  
+
+
 ```{r, spat_filter_norm}
 gobj %>% 
   # filter out cells with too few features, or features in too few cells
@@ -472,9 +557,13 @@ gobj %>%
 
 ```
 
+
 Now that our normalized data is ready, lets make some clusters in the spatial style. A notable difference with other platforms like CosMx/Xenium/scRNAseq is that there are few total genes. So automated selection of variable genes for principal components doesn't work. We can specify a theshold using `calculateHVF`. We also need to integrate our **all** of our sample slides using Harmony.
 
-Why integrate all samples instead of just some 
+
+> Why integrate all samples instead of just some ?
+
+
 ```{r, spat_cluster}
 gobj %>% 
   runPCA() %>%
@@ -491,7 +580,10 @@ gobj %>%
 
 ```
 
+
 When clustering with spatial data, we can actually incorporate spatial information in those clusters. Leiden clustering makes use of a spatial nearest neighbor network when clustering cells. The [workshop](https://drieslab.github.io/giotto_workshop_2024/working-with-multiple-samples.html#analyzing-joined-objects) from the Giotto group actually shows what happens if you don't integrate your datasets with two slides, the major groupings are actually the slides themselves! 
+
+
 ```{r, spat_network}
 gobj %>%
   # Create a sNN network (default)
@@ -531,6 +623,8 @@ Additionally, Leiden clustering in Giotto has the ability to `doLeidenSubCluster
 
 
 But for now, we can also see how the automated clustering did across the different slides:
+
+
 ```{r, leid_spatplot}
 p <- spatPlot(gobj, 
   cell_color = paste0("leiden_", resi),
@@ -541,9 +635,14 @@ p + labs(subtitle = paste(meta$`Donor ID`, collapse = "       ")) +
   theme(legend.position = 'bottom', plot.subtitle = element_text(hjust = 0.5))
 
 ```
+
+
 Notably the `purple`, `beige` and `red` colored clusters that are L2/3 IT neurons are in the correct layer. The `hot pink` set that is L4 IT neurons are a little harder to see in the picture, but are in the middle.
 
+
 From this point on, we can also save the Giotto objects, as we won't be modifying it anymore, just analyzing it.
+
+
 ```{r, save_giotto}
 # saveGiotto(gobj,
 #   foldername = "SEAAD_MTG_MERFISH.2024-12-11.giotto_obj",
@@ -552,6 +651,7 @@ From this point on, we can also save the Giotto objects, as we won't be modifyin
 # )
 
 ```
+
 
 ## Cell type annotations
 The dataset already has well characterized cell types included, but let us take a look at the standard workflow for marker genes for identifying clusters.  

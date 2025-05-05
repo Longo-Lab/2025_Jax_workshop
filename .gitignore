@@ -8,8 +8,11 @@
 !*.R
 !*.Rmd
 !*.nb.html
+!*.html
 !*.ipynb
 !*.md
+!*.png
+!*.jpg
 !README.md
 !.gitignore
 # etc...

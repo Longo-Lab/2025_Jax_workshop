@@ -42,6 +42,9 @@ library(limma)
 # data_path <- ("/sbgenomics/projects/asliuyar/asliuyar/ad-omics/data/2_sc_spatial_Butler")
 data_path <- getwd()
 
+# little bit of prep
+installGiottoEnvironment()
+
 # Functions ------------------------------------------------------------
 #' Generalized linear model based on a flexible formula
 #'
@@ -1187,6 +1190,12 @@ Important to remember, we looked at only the top markers, from a MERFISH panel s
 
 
 # Conclusion: ligand-receptors, intersections with single-cell, and takeaways (lecture)
+
+Before we wrap up, let's clean up the environment to help Cavatica shut down
+```{r, kill_it_with_fire, include = FALSE}
+system("rm -rf ~/.local/share/r-miniconda")
+
+```
 
 We won't have time today to cover the fourth type of spatial data: **Cell-cell ligand receptor interactions**
 

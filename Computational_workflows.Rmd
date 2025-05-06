@@ -51,7 +51,7 @@ data_path <- getwd()
 cavatica <- FALSE
 
 # little bit of prep
-installGiottoEnvironment()
+if (cavatica) installGiottoEnvironment()
 
 # Functions ------------------------------------------------------------
 #' Generalized linear model based on a flexible formula
@@ -167,6 +167,7 @@ if (integ) {
 # sc <- readRDS(
 #   file.path(data_path, "SEAAD_MTG_RNAseq_final-nuclei.2k_demo.rds")
 # )
+gc(verbose = FALSE)
 
 ```
 
@@ -1399,3 +1400,8 @@ Spatial transcriptomics
 4. Ligand-receptor interaction - proximity expression, but tested for ligand-receptor pairs in source-target cell types.
 
 Then you will be able to use that boat-load of money you just spent!
+
+
+## Epilogue
+
+Okay, so what if you want to try this outside of the course? Since that data is publicly available. All you need is the script to [build the data](https://github.com/Longo-Lab/2025_Jax_workshop/blob/main/SEAAD_MTG_Jax_prep.Rmd). Happy coding...
